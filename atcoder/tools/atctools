@@ -1,0 +1,28 @@
+#!/bin/sh
+
+python="/usr/bin/python3"
+bash="/bin/bash"
+
+usage() {
+    echo "usage: "`basename $0`" gen|test [args...]"
+    exit 1
+}
+
+scriptdir=`dirname $0`
+subcommand=$1
+
+if [ $# -ge 1 ]; then
+    shift 1
+else
+    usage
+fi
+
+gen_sample="$scriptdir"/"gen-sample.py"
+exec_test="$scriptdir"/"exec-test.sh"
+if [ "$subcommand" = "gen" ]; then
+    "$python" "$gen_sample" "$@"
+elif [ "$subcommand" = "test" ]; then
+    "$bash" "$exec_test" "$@"
+else
+    usage
+fi
