@@ -1,15 +1,15 @@
 #!/bin/bash
 
 usage() {
-    echo "usage: "`basename $0`" <executable> <task_id>"
+    echo "usage: "`basename $0`" <task-id> <executable>"
 }
 
 if [[ $# -ne 2 ]]; then
     usage
 fi
 
-executable=$1
-task_id=$2
+task_id=$1
+executable=$2
 
 dir=testcases/"$task_id"
 sample_num=$(echo $(ls "$dir" | wc -l)"/2" | bc)
