@@ -29,15 +29,15 @@ def download_html(url):
     return html
 
 def save_samples(contest_id,task_id):
-    full_id = contest_id + "_" + task_id
+    full_id = re.sub('-','_',contest_id + "_" + task_id)
     url_base = "https://atcoder.jp/contests/"
     url = url_base + contest_id + "/tasks/" + full_id
     html = download_html(url)
 
     parser = "lxml"
     soup = BeautifulSoup(html,parser)
-    sample_inputs = soup.find_all("h3",string=re.compile("入力例 \d*"))
-    sample_outputs = soup.find_all("h3",string=re.compile("出力例 \d*"))
+    sample_inputs = soup.find_all("h3",string=re.compile(r"入力例 ?\d*"))
+    sample_outputs = soup.find_all("h3",string=re.compile(r"出力例 ?\d*"))
 
     directory = "testcases/" + task_id + "/"
     os.makedirs(directory,exist_ok=True)
@@ -45,12 +45,19 @@ def save_samples(contest_id,task_id):
     for i,sample in enumerate(sample_inputs):
         file = directory + "in-" + str(i+1) + ".txt"
         with open(file,"w") as f:
-            f.write(sample.find_next_sibling("pre").text);
+            pre = sample.find_next_sibling("pre")
+            if pre == None:
+                pre = sample.find_next_sibling("section").find("pre")
+            f.write(pre.text);
 
     for i,sample in enumerate(sample_outputs):
         file = directory + "out-" + str(i+1) + ".txt"
         with open(file,"w") as f:
             f.write(sample.find_next_sibling("pre").text);
+            pre = sample.find_next_sibling("pre")
+            if pre == None:
+                pre = sample.find_next_sibling("section").find("pre")
+            f.write(pre.text);
 
 def make_task_id_list(contest_id):
     url_base = "https://atcoder.jp/contests/"
