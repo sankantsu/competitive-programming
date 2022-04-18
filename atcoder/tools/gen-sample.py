@@ -50,8 +50,8 @@ def save_samples(contest_id,task_id):
 
     directory = "testcases/" + task_id + "/"
     os.makedirs(directory,exist_ok=True)
-    save_sample_files("in",sample_inputs,directory)
-    save_sample_files("out",sample_outputs,directory)
+    save_sample_files("in-",sample_inputs,directory)
+    save_sample_files("out-",sample_outputs,directory)
 
 def make_task_id_list(contest_id):
     url_base = "https://atcoder.jp/contests/"
