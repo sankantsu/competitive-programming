@@ -28,6 +28,15 @@ def download_html(url):
     html = body.decode(charset)
     return html
 
+def save_sample_files(prefix,samples,directory):
+    for i,sample in enumerate(samples):
+        file = directory + prefix + str(i+1) + ".txt"
+        with open(file,"w") as f:
+            pre = sample.find_next_sibling("pre")
+            if pre == None:
+                pre = sample.find_next_sibling("section").find("pre")
+            f.write(pre.text);
+
 def save_samples(contest_id,task_id):
     full_id = re.sub('-','_',contest_id + "_" + task_id)
     url_base = "https://atcoder.jp/contests/"
@@ -41,23 +50,8 @@ def save_samples(contest_id,task_id):
 
     directory = "testcases/" + task_id + "/"
     os.makedirs(directory,exist_ok=True)
-
-    for i,sample in enumerate(sample_inputs):
-        file = directory + "in-" + str(i+1) + ".txt"
-        with open(file,"w") as f:
-            pre = sample.find_next_sibling("pre")
-            if pre == None:
-                pre = sample.find_next_sibling("section").find("pre")
-            f.write(pre.text);
-
-    for i,sample in enumerate(sample_outputs):
-        file = directory + "out-" + str(i+1) + ".txt"
-        with open(file,"w") as f:
-            f.write(sample.find_next_sibling("pre").text);
-            pre = sample.find_next_sibling("pre")
-            if pre == None:
-                pre = sample.find_next_sibling("section").find("pre")
-            f.write(pre.text);
+    save_sample_files("in",sample_inputs,directory)
+    save_sample_files("out",sample_outputs,directory)
 
 def make_task_id_list(contest_id):
     url_base = "https://atcoder.jp/contests/"
