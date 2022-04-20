@@ -35,7 +35,8 @@ def save_sample_files(prefix,samples,directory):
             pre = sample.find_next_sibling("pre")
             if pre == None:
                 pre = sample.find_next_sibling("section").find("pre")
-            f.write(pre.text);
+            txt = pre.text.lstrip()
+            f.write(txt);
 
 def save_samples(contest_id,task_id):
     full_id = re.sub('-','_',contest_id + "_" + task_id)
