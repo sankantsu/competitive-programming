@@ -22,6 +22,7 @@ def int_to_alphabets(i):
     return s
 
 def download_html(url):
+    print("download",url)
     with urlopen(url) as res:
         body = res.read()
         charset = res.headers.get_content_charset()
