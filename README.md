@@ -8,9 +8,10 @@
 
 ## ソースコード
 
-- `atcoder`
-- `aoj`
-- `poj`
+- `atcoder`: AtCoder の Algorithm コンテスト
+- `ahc`: AtCoder の Heuristic コンテスト
+- `aoj`: Aizu Online Judge
+- `poj`: Peking University Online Judge
 
 の各ディレクトリに，各オンラインジャッジサービスで提出したコードを保存しています．
 
