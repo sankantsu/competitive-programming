@@ -47,6 +47,7 @@ struct Polyomino {
             _vert_size = std::max(_vert_size, j+1);
         }
     }
+    auto get_area() const { return _area; }
     auto get_relative_positions() const { return _relative_positions; }
     projection_type make_projection(Direction dir) const {
         int size = (dir == Direction::Horizontal) ? _horz_size : _vert_size;
@@ -124,7 +125,13 @@ struct Problem {
     Problem(int board_size, int num_oilfield, double error_param, std::vector<Polyomino> oil_fields)
         : _board_size(board_size), _num_oilfield(num_oilfield), _error_param(error_param),
           _oil_fields(oil_fields)
-    { }
+    {
+        // sort oil fields by are size
+        std::sort(_oil_fields.begin(), _oil_fields.end(),
+                  [](const Polyomino& lhs, const Polyomino& rhs) {
+                        return lhs.get_area() > rhs.get_area();
+                  });
+    }
     int get_board_size() const { return _board_size; }
     int get_num_oilfield() const { return _num_oilfield; }
     double get_error_param() const { return _error_param; }
