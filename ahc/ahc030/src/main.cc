@@ -288,7 +288,7 @@ struct ProjectionSolver {
                 const int proj_size = proj.size();
                 const int max_offset = _board_size - proj_size;
                 for (const auto& sol : _frontier) {
-                    for (int off = 0; off < max_offset; off++) {
+                    for (int off = 0; off <= max_offset; off++) {
                         Solution next = sol.next(proj, off);
                         _candidates.push(next);
                     }
