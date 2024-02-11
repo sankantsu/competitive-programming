@@ -100,6 +100,20 @@ struct Client {
         std::cin >> check;
         return check;
     }
+    void visualize_board(const std::vector<std::vector<int>>& board) {
+        int n = board.size();
+        for (int i = 0; i < n; i++) {
+            for (int j = 0; j < n; j++) {
+                int v = board[i][j];
+                if (v > 0) {
+                    std::string color = oil_amount_to_color(v);
+                    char query[32];
+                    std::snprintf(query, 32, "#c %d %d %s", i, j, color.c_str());
+                    std::cout << query << std::endl;
+                }
+            }
+        }
+    }
     private:
     static std::string construct_vector_query(char c, const std::vector<Point>& set) {
         constexpr std::size_t bufsize = 16;
@@ -118,6 +132,13 @@ struct Client {
             s += std::string(buf);
         }
         return s;
+    }
+    static std::string oil_amount_to_color(int v) {
+        int c = 255 - v*48;
+        c = std::max(c, 0);
+        char buf[8];
+        std::snprintf(buf, 8, "#%x%x%x", c, c, c);
+        return std::string(buf);
     }
 };
 
@@ -395,7 +416,12 @@ struct ProjectionCombinationSolver {
                 }
             }
         }
-        _client.answer(ans);
+        int check = _client.answer(ans);
+        if (!check) {
+            _client.visualize_board(board);
+            // Dirty hack to ensure coloring
+            _client.dig(Point{0,0});
+        }
     }
     private:
     Problem _problem;
