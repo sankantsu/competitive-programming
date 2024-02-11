@@ -3,6 +3,7 @@
 #include <iostream>
 #include <vector>
 #include <string>
+#include <queue>
 
 namespace util {
 
@@ -35,6 +36,7 @@ enum class Direction {
 };
 
 struct Polyomino {
+    using projection_type = std::vector<oil_reserve_t>;
     Polyomino(int area, std::vector<Point> relative_positions)
         : _area(area), _relative_positions(relative_positions)
     {
@@ -46,18 +48,18 @@ struct Polyomino {
         }
     }
     auto get_relative_positions() const { return _relative_positions; }
-    std::vector<int> make_projection(Direction dir) const {
+    projection_type make_projection(Direction dir) const {
         int size = (dir == Direction::Horizontal) ? _horz_size : _vert_size;
-        std::vector<int> res(size);
+        projection_type proj(size);
         for (auto [i,j] : _relative_positions) {
             if (dir == Direction::Horizontal) {
-                res[i]++;
+                proj[i]++;
             }
             else {
-                res[j]++;
+                proj[j]++;
             }
         }
-        return res;
+        return proj;
     }
     private:
     int _area;
@@ -240,54 +242,94 @@ struct ProjectionObserver {
 
 // Solve 1d histgram to 1d arrangements
 struct ProjectionSolver {
-    ProjectionSolver(const std::vector<int>& pred, const std::vector<std::vector<int>>& projections)
+    using projection_type = Polyomino::projection_type;
+    ProjectionSolver(const projection_type& pred, const std::vector<projection_type>& projections)
         : _pred(pred), _projections(projections)
     {}
+    struct Solution {
+        int penalty;
+        std::vector<int> offsets;
+        projection_type rest;
+        Solution next(const projection_type& projection, int offset) const {
+            Solution new_sol = *this;
+            new_sol.offsets.push_back(offset);
+            for (int j = 0; j < projection.size(); j++) {
+                new_sol.rest[offset+j] -= projection[j];
+            }
+            new_sol.penalty = new_sol.calc_penalty();
+            return new_sol;
+        }
+        int calc_penalty() const {
+            int penalty = 0;
+            for (int j = 0; j < rest.size(); j++) {
+                if (rest[j] < 0) {
+                    penalty += rest[j]*rest[j];
+                }
+            }
+            return penalty;
+        }
+    };
+    struct CompareSolution {
+        bool operator()(const Solution& lhs, const Solution& rhs) {
+            return lhs.penalty > rhs.penalty;
+        }
+    };
+    struct BeamSearch {
+        BeamSearch(const projection_type& pred, int n_cand)
+            : _board_size(pred.size()), _n_cand(n_cand)
+        {
+            Solution initial_state;
+            initial_state.rest = pred;
+            _frontier.push_back(initial_state);
+        }
+        std::vector<Solution> beam_search(const std::vector<projection_type>& projections) {
+            for (int k = 0; k < projections.size(); k++) {
+                const auto& proj = projections[k];
+                const int proj_size = proj.size();
+                const int max_offset = _board_size - proj_size;
+                for (const auto& sol : _frontier) {
+                    for (int off = 0; off < max_offset; off++) {
+                        Solution next = sol.next(proj, off);
+                        _candidates.push(next);
+                    }
+                }
+                select_top_cands();
+            }
+            return _frontier;
+        }
+        void select_top_cands() {
+            _frontier.clear();
+            for (int i = 0; i < _n_cand; i++) {
+                if (_candidates.empty()) {
+                    break;
+                }
+                Solution sol = _candidates.top();
+                _candidates.pop();
+                _frontier.push_back(sol);
+            }
+            _candidates = queue_type{};
+        }
+        private:
+        using queue_type = std::priority_queue<Solution, std::vector<Solution>, CompareSolution>;
+        int _board_size;
+        int _n_cand;
+        std::vector<Solution> _frontier;
+        queue_type _candidates;
+    };
     // resolve offsets of all polyominos
     std::vector<int> solve() {
-        std::vector<int> offsets;
-        for (const auto& proj : _projections) {
-            int offset = find_best_offset(_pred, proj);
-            offsets.push_back(offset);
-        }
-        return offsets;
-    }
-    static int find_best_offset(const std::vector<int>& pred, const std::vector<int>& projection) {
-        constexpr int inf_penalty = 2*20*20*20;
-        int min_penalty = inf_penalty;
-        int best_offset = -1;
-        int max_i = projection.size();
-        int max_offset = pred.size() - max_i;
-        std::cerr << "pred, proj:" << std::endl;
-        util::print_vector(pred);
-        util::print_vector(projection);
-        for (int off = 0; off < max_offset; off++) {
-            int penalty = calc_penalty(pred, projection, off);
-            std::cerr << "off, penalty: " << off << ", " << penalty << std::endl;
-            // TODO: consider multiple possibilities (not only first match)
-            if (penalty < min_penalty) {
-                best_offset = off;
-                min_penalty = penalty;
-            }
-        }
-        return best_offset;
-    }
-    static int calc_penalty(const std::vector<int>& pred, const std::vector<int>& projection, int offset) {
-        int penalty = 0;
-        for (int i = 0; i < projection.size(); i++) {
-            int rest = pred[i+offset] - projection[i];
-            if (rest < 0) {
-                penalty += rest*rest;
-            }
-        }
-        return penalty;
+        const int n_cand = 10;
+        BeamSearch runner(_pred, n_cand);
+        auto cands = runner.beam_search(_projections);
+        return cands[0].offsets;
     }
     private:
-    std::vector<int> _pred;
-    std::vector<std::vector<int>> _projections;
+    projection_type _pred;
+    std::vector<projection_type> _projections;
 };
 
 struct ProjectionCombinationSolver {
+    using projection_type = Polyomino::projection_type;
     ProjectionCombinationSolver(const Problem& problem)
         : _problem(problem),
           _horz_observer(Direction::Horizontal, problem.get_board_size(), problem.get_error_param()),
@@ -311,7 +353,7 @@ struct ProjectionCombinationSolver {
         return board;
     }
     void solve() {
-        constexpr int num_observe = 4;
+        constexpr int num_observe = 1;
         for (int i = 0; i < num_observe; i++) {
             _horz_observer.observe_all();
             _vert_observer.observe_all();
@@ -321,8 +363,8 @@ struct ProjectionCombinationSolver {
         /* std::cerr << "horz_pred: "; */
         /* util::print_vector(horz_pred); */
         auto polyominos = _problem.get_polyominos();
-        std::vector<std::vector<int>> horz_projections;
-        std::vector<std::vector<int>> vert_projections;
+        std::vector<projection_type> horz_projections;
+        std::vector<projection_type> vert_projections;
         for (const auto& poly : polyominos) {
             horz_projections.push_back(poly.make_projection(Direction::Horizontal));
             vert_projections.push_back(poly.make_projection(Direction::Vertical));
