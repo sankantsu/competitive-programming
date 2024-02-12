@@ -432,6 +432,9 @@ struct ProjectionCombinationSolver {
         SolutionPicker(search_results_type&& horz_solutions, search_results_type&& vert_solutions)
             : _horz_solutions(horz_solutions), _vert_solutions(vert_solutions)
         {}
+        // BUG: search order is not correct
+        // some good candidates are not traversed.
+        // e.g. search order (0,0) -> (0,1) -> (1,1) ignores good candidate (1,0)
         Solution pick() {
             auto [i,j] = _idx;
             int horz_penalty = _horz_solutions[i].penalty;
