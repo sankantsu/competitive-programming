@@ -76,6 +76,27 @@ struct Polyomino {
     int _vert_size;
 };
 
+struct Board {
+    using value_type = oil_reserve_t;
+    Board(int board_size)
+        : _board_size(board_size), _data(board_size*board_size)
+    {}
+    int get_board_size() const { return _board_size; }
+    value_type* operator[](std::size_t idx) { return _data.data() + _board_size*idx; }
+    const value_type* operator[](std::size_t idx) const { return _data.data() + _board_size*idx; }
+    void add_polyomino(const Polyomino& poly, int horz_off, int vert_off) {
+        const auto relative_positions = poly.get_relative_positions();
+        for (auto [rel_i,rel_j] : relative_positions) {
+            int i = horz_off + rel_i;
+            int j = vert_off + rel_j;
+            _data[i*_board_size + j]++;
+        }
+    }
+    private:
+    int _board_size;
+    std::vector<value_type> _data;
+};
+
 struct Client {
     oil_reserve_t dig(Point p) {
         // construct query
@@ -107,8 +128,8 @@ struct Client {
         std::cin >> check;
         return check;
     }
-    void visualize_board(const std::vector<std::vector<int>>& board) {
-        int n = board.size();
+    void visualize_board(const Board& board) {
+        int n = board.get_board_size();
         for (int i = 0; i < n; i++) {
             for (int j = 0; j < n; j++) {
                 int v = board[i][j];
@@ -380,20 +401,14 @@ struct ProjectionCombinationSolver {
           _horz_observer(Direction::Horizontal, problem.get_board_size(), problem.get_error_param()),
           _vert_observer(Direction::Vertical, problem.get_board_size(), problem.get_error_param())
     {}
-    auto restore_board(const std::vector<int>& horz_offsets, const std::vector<int>& vert_offsets) {
-        std::vector<std::vector<int>> board;
-        for (int i = 0; i < _problem.get_board_size(); i++) {
-            board.push_back(std::vector<int>(_problem.get_board_size()));
-        }
-        const auto polyominos = _problem.get_polyominos();
+    Board restore_board(std::vector<int>& horz_offsets, std::vector<int>& vert_offsets) {
+        Board board(_problem.get_board_size());
+        const auto& polyominos = _problem.get_polyominos();
         for (int k = 0; k < polyominos.size(); k++) {
             const auto& poly = polyominos[k];
             int horz_off = horz_offsets[k];
             int vert_off = vert_offsets[k];
-            const auto relative_positions = poly.get_relative_positions();
-            for (auto [i,j] : relative_positions) {
-                board[horz_off+i][vert_off+j]++;
-            }
+            board.add_polyomino(poly, horz_off, vert_off);
         }
         return board;
     }
