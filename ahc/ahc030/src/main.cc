@@ -297,7 +297,9 @@ struct ProjectionObserver {
         std::vector<int> res;
         for (int i = 0; i < _board_size; i++) {
             double mean = _sum[i] / _num_observation[i];
-            res.push_back(_model.predict_n_oil(_board_size, mean));
+            int pred = _model.predict_n_oil(_board_size, mean);
+            pred = std::max(0, std::min(_board_size, pred));
+            res.push_back(pred);
         }
         return res;
     }
