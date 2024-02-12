@@ -92,6 +92,18 @@ struct Board {
             _data[i*_board_size + j]++;
         }
     }
+    std::vector<Point> make_answer() {
+        std::vector<Point> ans;
+        for (int i = 0; i < _board_size; i++) {
+            for (int j = 0; j < _board_size; j++) {
+                int idx = i*_board_size + j;
+                if (_data[idx] > 0) {
+                    ans.push_back(Point{i,j});
+                }
+            }
+        }
+        return ans;
+    }
     private:
     int _board_size;
     std::vector<value_type> _data;
@@ -133,12 +145,13 @@ struct Client {
         for (int i = 0; i < n; i++) {
             for (int j = 0; j < n; j++) {
                 int v = board[i][j];
+                std::string color = "#ffffff";  // default
                 if (v > 0) {
-                    std::string color = oil_amount_to_color(v);
-                    char query[32];
-                    std::snprintf(query, 32, "#c %d %d %s", i, j, color.c_str());
-                    std::cout << query << std::endl;
+                    color = oil_amount_to_color(v);
                 }
+                char query[32];
+                std::snprintf(query, 32, "#c %d %d %s", i, j, color.c_str());
+                std::cout << query << std::endl;
             }
         }
     }
@@ -400,8 +413,19 @@ struct ProjectionCombinationSolver {
         : _problem(problem),
           _horz_observer(Direction::Horizontal, problem.get_board_size(), problem.get_error_param()),
           _vert_observer(Direction::Vertical, problem.get_board_size(), problem.get_error_param())
-    {}
-    Board restore_board(std::vector<int>& horz_offsets, std::vector<int>& vert_offsets) {
+    {
+        // init projections
+        for (const auto& poly : _problem.get_polyominos()) {
+            _horz_projections.push_back(poly.make_projection(Direction::Horizontal));
+            _vert_projections.push_back(poly.make_projection(Direction::Vertical));
+        }
+    }
+    struct Solution {
+        std::vector<int> horz_offsets;
+        std::vector<int> vert_offsets;
+    };
+    Board restore_board(const Solution& sol) {
+        const auto& [horz_offsets, vert_offsets] = sol;
         Board board(_problem.get_board_size());
         const auto& polyominos = _problem.get_polyominos();
         for (int k = 0; k < polyominos.size(); k++) {
@@ -412,58 +436,60 @@ struct ProjectionCombinationSolver {
         }
         return board;
     }
-    void solve() {
-        constexpr int num_observe = 1;
-        for (int i = 0; i < num_observe; i++) {
-            _horz_observer.observe_all();
-            _vert_observer.observe_all();
-        }
+    Solution observe_and_guess() {
+        observe_all();
         auto horz_pred = _horz_observer.get_predict_values();
         auto vert_pred = _vert_observer.get_predict_values();
-        /* std::cerr << "horz_pred: "; */
-        /* util::print_vector(horz_pred); */
         auto polyominos = _problem.get_polyominos();
-        std::vector<projection_type> horz_projections;
-        std::vector<projection_type> vert_projections;
-        for (const auto& poly : polyominos) {
-            horz_projections.push_back(poly.make_projection(Direction::Horizontal));
-            vert_projections.push_back(poly.make_projection(Direction::Vertical));
-        }
-        ProjectionSolver horz_solver(horz_pred, horz_projections);
+        ProjectionSolver horz_solver(horz_pred, _horz_projections);
+        ProjectionSolver vert_solver(vert_pred, _vert_projections);
         auto horz_offsets = horz_solver.solve();
+        auto vert_offsets = vert_solver.solve();
+        debug_print_offsets(horz_offsets, vert_offsets);
+        Solution sol {std::move(horz_offsets), std::move(vert_offsets)};
+        return sol;
+    }
+    void solve() {
+        constexpr int num_observe = 5;
+        for (int i = 0; i < num_observe; i++) {
+            util::print_hline();
+            std::cerr << i << "th iter start" << std::endl;
+            auto sol = observe_and_guess();
+            auto board = restore_board(sol);
+            auto ans = board.make_answer();
+            int check = _client.answer(ans);
+            if (check == 1) {  // successfully found all oils
+                return;
+            }
+            else {
+                _client.visualize_board(board);
+            }
+        }
+        // Dirty hack to ensure coloring
+        _client.dig(Point{0,0});
+    }
+    private:
+    void observe_all() {
+        _horz_observer.observe_all();
+        _vert_observer.observe_all();
+    }
+    void debug_print_offsets(std::vector<int>& horz_offsets, std::vector<int>& vert_offsets) {
         std::cerr << "horz_offsets: ";
         util::print_vector(horz_offsets);
         std::cerr << std::endl;
-        util::print_hline();
-        ProjectionSolver vert_solver(vert_pred, vert_projections);
-        auto vert_offsets = vert_solver.solve();
+
         std::cerr << "vert_offsets: ";
         util::print_vector(vert_offsets);
         std::cerr << std::endl;
-        util::print_hline();
-
-        auto board = restore_board(horz_offsets, vert_offsets);
-        int n = _problem.get_board_size();
-        std::vector<Point> ans;
-        for (int i = 0; i < n; i++) {
-            for (int j = 0; j < n; j++) {
-                if (board[i][j] > 0) {
-                    ans.push_back(Point{i,j});
-                }
-            }
-        }
-        int check = _client.answer(ans);
-        if (!check) {
-            _client.visualize_board(board);
-            // Dirty hack to ensure coloring
-            _client.dig(Point{0,0});
-        }
     }
-    private:
+
     Problem _problem;
     Client _client;
     ProjectionObserver _horz_observer;
     ProjectionObserver _vert_observer;
+    // xy projection of polyominos
+    std::vector<projection_type> _horz_projections;
+    std::vector<projection_type> _vert_projections;
 };
 
 Problem parse_input() {
