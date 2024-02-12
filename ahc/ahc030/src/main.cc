@@ -1,8 +1,9 @@
 #include <cstdio>
 #include <cmath>
-#include <algorithm>
 #include <cassert>
 #include <iostream>
+#include <numeric>
+#include <algorithm>
 #include <vector>
 #include <string>
 #include <queue>
@@ -456,6 +457,32 @@ struct ProjectionCombinationSolver {
             else {
                 _idx = std::make_pair(i, j+1);
             }
+        }
+        static std::vector<int> pick_large_variance(const search_results_type& solutions) {
+            int num_cand = solutions.size()/10;  // top 10%
+            int board_size = solutions[0].rest.size();
+            std::vector<int> sum(board_size);
+            std::vector<int> ssum(board_size);  // square sum
+            for (int i = 0; i < num_cand; i++) {
+                const auto& rest = solutions[i].rest;
+                for (int j = 0; j < board_size; j++) {
+                    sum[j] += rest[j];
+                    ssum[j] += rest[j]*rest[j];
+                }
+            }
+            std::vector<int> non_normalized_var(board_size);
+            for (int j = 0; j < board_size; j++) {
+                non_normalized_var[j] = ssum[j] - sum[j]*sum[j];
+            }
+            // index sort
+            std::vector<int> indices(non_normalized_var.size());
+            std::iota(indices.begin(), indices.end(), 0);
+            std::sort(indices.begin(), indices.end(),
+                      [&non_normalized_var](size_t i, size_t j){ return non_normalized_var[i] > non_normalized_var[j]; });
+            int num_remeasurement = board_size*4/5;
+            std::vector<int> res(num_remeasurement);
+            std::copy(indices.begin(), std::next(indices.begin(), num_remeasurement), res.begin());
+            return res;
         }
         index_t _idx;
         search_results_type _horz_solutions;
