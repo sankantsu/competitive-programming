@@ -7,12 +7,19 @@
 
 namespace util {
 
+void print_hline(std::ostream& ostream=std::cerr) {
+    ostream << "--------------------------------" << std::endl;
+}
+
 template <typename T>
 void print_vector(const std::vector<T>& v, std::ostream& ostream=std::cerr) {
-    for (auto x : v) {
-        ostream << x << " ";
+    char delim = ' ';
+    for (int i = 0; i < v.size(); i++) {
+        ostream << v[i];
+        if (i < v.size() - 1) {
+            ostream << delim;
+        }
     }
-    ostream << std::endl;
 }
 
 }
@@ -349,6 +356,16 @@ struct ProjectionSolver {
         const int n_cand = 1000;
         BeamSearch runner(_pred, n_cand);
         auto cands = runner.beam_search(_projections);
+        for (int i = 0; i < cands.size(); i++) {
+            const auto& cand = cands[i];
+            std::cerr << i << "th: ";
+            std::cerr << "penalty = " << cand.penalty;
+            std::cerr << ", offsets = ";
+            util::print_vector(cand.offsets);
+            std::cerr << ", rest = ";
+            util::print_vector(cand.rest);
+            std::cerr << std::endl;
+        }
         return cands[0].offsets;
     }
     private:
@@ -401,10 +418,14 @@ struct ProjectionCombinationSolver {
         auto horz_offsets = horz_solver.solve();
         std::cerr << "horz_offsets: ";
         util::print_vector(horz_offsets);
+        std::cerr << std::endl;
+        util::print_hline();
         ProjectionSolver vert_solver(vert_pred, vert_projections);
         auto vert_offsets = vert_solver.solve();
         std::cerr << "vert_offsets: ";
         util::print_vector(vert_offsets);
+        std::cerr << std::endl;
+        util::print_hline();
 
         auto board = restore_board(horz_offsets, vert_offsets);
         int n = _problem.get_board_size();
