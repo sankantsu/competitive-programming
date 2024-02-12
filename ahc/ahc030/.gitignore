@@ -1,2 +1,4 @@
 tools/target
 build/
+out/
+log/
