@@ -390,21 +390,11 @@ struct ProjectionSolver {
         queue_type _candidates;
     };
     // resolve offsets of all polyominos
-    std::vector<int> solve() {
+    std::vector<Solution> solve() {
         const int n_cand = 1000;
         BeamSearch runner(_pred, n_cand);
         auto cands = runner.beam_search(_projections);
-        for (int i = 0; i < cands.size(); i++) {
-            const auto& cand = cands[i];
-            std::cerr << i << "th: ";
-            std::cerr << "penalty = " << cand.penalty;
-            std::cerr << ", offsets = ";
-            util::print_vector(cand.offsets);
-            std::cerr << ", rest = ";
-            util::print_vector(cand.rest);
-            std::cerr << std::endl;
-        }
-        return cands[0].offsets;
+        return cands;
     }
     private:
     projection_type _pred;
@@ -425,11 +415,51 @@ struct ProjectionCombinationSolver {
         }
     }
     struct Solution {
+        int horz_penalty;
+        int vert_penalty;
         std::vector<int> horz_offsets;
         std::vector<int> vert_offsets;
+        auto get_penalties() const {
+            return std::make_pair(horz_penalty, vert_penalty);
+        }
+        auto get_offsets() const {
+            return std::make_pair(horz_offsets, vert_offsets);
+        }
+    };
+    struct SolutionPicker {
+        using index_t = std::pair<int,int>;  // index to horz solutions and vert solutions
+        using search_results_type = std::vector<ProjectionSolver::Solution>;
+        SolutionPicker(search_results_type&& horz_solutions, search_results_type&& vert_solutions)
+            : _horz_solutions(horz_solutions), _vert_solutions(vert_solutions)
+        {}
+        Solution pick() {
+            auto [i,j] = _idx;
+            int horz_penalty = _horz_solutions[i].penalty;
+            int vert_penalty = _vert_solutions[j].penalty;
+            const auto& horz_offsets = _horz_solutions[i].offsets;
+            const auto& vert_offsets = _vert_solutions[j].offsets;
+            Solution sol { horz_penalty, vert_penalty, horz_offsets, vert_offsets };
+            update_index();
+            return sol;
+        }
+        private:
+        void update_index() {
+            auto [i,j] = _idx;
+            int horz_penalty_delta = _horz_solutions[i+1].penalty - _horz_solutions[i].penalty;
+            int vert_penalty_delta = _vert_solutions[j+1].penalty - _vert_solutions[j].penalty;
+            if (horz_penalty_delta < vert_penalty_delta) {
+                _idx = std::make_pair(i+1, j);
+            }
+            else {
+                _idx = std::make_pair(i, j+1);
+            }
+        }
+        index_t _idx;
+        search_results_type _horz_solutions;
+        search_results_type _vert_solutions;
     };
     Board restore_board(const Solution& sol) {
-        const auto& [horz_offsets, vert_offsets] = sol;
+        const auto& [horz_offsets, vert_offsets] = sol.get_offsets();
         Board board(_problem.get_board_size());
         const auto& polyominos = _problem.get_polyominos();
         for (int k = 0; k < polyominos.size(); k++) {
@@ -440,33 +470,38 @@ struct ProjectionCombinationSolver {
         }
         return board;
     }
-    Solution observe_and_guess() {
-        observe_all();
+    SolutionPicker make_candidates() {
         auto horz_pred = _horz_observer.get_predict_values();
         auto vert_pred = _vert_observer.get_predict_values();
         auto polyominos = _problem.get_polyominos();
         ProjectionSolver horz_solver(horz_pred, _horz_projections);
         ProjectionSolver vert_solver(vert_pred, _vert_projections);
-        auto horz_offsets = horz_solver.solve();
-        auto vert_offsets = vert_solver.solve();
-        debug_print_offsets(horz_offsets, vert_offsets);
-        Solution sol {std::move(horz_offsets), std::move(vert_offsets)};
-        return sol;
+        auto horz_solutions = horz_solver.solve();
+        auto vert_solutions = vert_solver.solve();
+        SolutionPicker solution_picker(std::move(horz_solutions), std::move(vert_solutions));
+        return solution_picker;
     }
     void solve() {
         constexpr int num_observe = 5;
         for (int i = 0; i < num_observe; i++) {
             util::print_hline();
             std::cerr << i << "th iter start" << std::endl;
-            auto sol = observe_and_guess();
-            auto board = restore_board(sol);
-            auto ans = board.make_answer();
-            int check = _client.answer(ans);
-            if (check == 1) {  // successfully found all oils
-                return;
-            }
-            else {
-                _client.visualize_board(board);
+            observe_all();
+            auto solution_picker = make_candidates();
+            constexpr int num_challenge = 10;
+            for (int i = 0; i < num_challenge; i++) {
+                std::cerr << "try: " << i+1 << std::endl;
+                auto sol = solution_picker.pick();
+                debug_print_solution(sol);
+                auto board = restore_board(sol);
+                auto ans = board.make_answer();
+                int check = _client.answer(ans);
+                if (check == 1) {  // successfully found all oils
+                    return;
+                }
+                else {
+                    _client.visualize_board(board);
+                }
             }
         }
         // Dirty hack to ensure coloring
@@ -477,11 +512,16 @@ struct ProjectionCombinationSolver {
         _horz_observer.observe_all();
         _vert_observer.observe_all();
     }
-    void debug_print_offsets(std::vector<int>& horz_offsets, std::vector<int>& vert_offsets) {
+    void debug_print_solution(const Solution& sol) {
+        auto [horz_penalty, vert_penalty] = sol.get_penalties();
+        const auto& [horz_offsets, vert_offsets] = sol.get_offsets();
+        auto total_penalty = horz_penalty + vert_penalty;
+        std::cerr
+            << "penalty: " << horz_penalty << " + " << vert_penalty
+            << " = " << total_penalty << std::endl;
         std::cerr << "horz_offsets: ";
         util::print_vector(horz_offsets);
         std::cerr << std::endl;
-
         std::cerr << "vert_offsets: ";
         util::print_vector(vert_offsets);
         std::cerr << std::endl;
