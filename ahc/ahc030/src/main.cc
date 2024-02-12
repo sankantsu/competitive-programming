@@ -336,7 +336,7 @@ struct ProjectionSolver {
             int penalty = 0;
             for (int j = 0; j < rest.size(); j++) {
                 if (rest[j] < 0) {
-                    penalty += rest[j]*rest[j];
+                    penalty += rest[j]*(rest[j]-1);
                 }
             }
             return penalty;
