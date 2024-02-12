@@ -346,7 +346,7 @@ struct ProjectionSolver {
     };
     // resolve offsets of all polyominos
     std::vector<int> solve() {
-        const int n_cand = 10;
+        const int n_cand = 1000;
         BeamSearch runner(_pred, n_cand);
         auto cands = runner.beam_search(_projections);
         return cands[0].offsets;
