@@ -126,6 +126,7 @@ struct Client {
         _cache.fill(oil_reservation::undef);
         _max_request_count = 2*board_size*board_size;
     }
+    auto max_request_count() { return _max_request_count; }
     oil_reserve_t dig(Point p) {
         int cache_value = _cache[p.i][p.j];
         if (cache_value != oil_reservation::undef) {
@@ -641,8 +642,9 @@ struct ProjectionCombinationSolver {
         return solution_picker;
     }
     void solve() {
-        constexpr int num_observe = 5;
-        constexpr int num_dig_line = 8;
+        const int board_size = _problem.get_board_size();
+        const int num_observe = 5;
+        const int num_dig_line = (client.max_request_count() - 2*board_size*num_observe)/board_size;
         int dig_idx;
         Direction dig_dir = Direction::Horizontal;
         auto switch_direction = [&dig_dir] {
@@ -760,6 +762,13 @@ Problem parse_input() {
 int main() {
     ahc::Problem problem = ahc::parse_input();
     ahc::client.init(problem.get_board_size());
-    ahc::ProjectionCombinationSolver solver(problem);
-    solver.solve();
+    int m = problem.get_num_oilfield();
+    if (m < 10) {
+        ahc::ProjectionCombinationSolver solver(problem);
+        solver.solve();
+    }
+    else {
+        ahc::BruteForceSolver solver(problem);
+        solver.solve();
+    }
 }
