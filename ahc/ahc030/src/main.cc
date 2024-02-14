@@ -80,12 +80,36 @@ struct Polyomino {
     int _vert_size;
 };
 
+struct Problem {
+    Problem() = default;
+    void init(int board_size, int num_oilfield, double error_param, const std::vector<Polyomino>& oil_fields) {
+        _board_size = board_size;
+        _num_oilfield = num_oilfield;
+        _error_param = error_param;
+        _oil_fields = oil_fields;
+        // sort oil fields by are size
+        std::sort(_oil_fields.begin(), _oil_fields.end(),
+                  [](const Polyomino& lhs, const Polyomino& rhs) {
+                        return lhs.get_area() > rhs.get_area();
+                  });
+    }
+    int get_board_size() const { return _board_size; }
+    int get_num_oilfield() const { return _num_oilfield; }
+    double get_error_param() const { return _error_param; }
+    std::vector<Polyomino> get_polyominos() const { return _oil_fields; }
+    private:
+    int _board_size;
+    int _num_oilfield;
+    double _error_param;
+    std::vector<Polyomino> _oil_fields;
+};
+static Problem problem;
+
 struct Board {
     using value_type = oil_reserve_t;
-    Board() {}
-    Board(int board_size)
-        : _board_size(board_size), _data(board_size*board_size)
-    {}
+    Board() : _board_size(problem.get_board_size()) {
+        _data.resize(_board_size*_board_size);
+    }
     int get_board_size() const { return _board_size; }
     void fill(value_type v) {
         for (int i = 0; i < _data.size(); i++) {
@@ -120,11 +144,11 @@ struct Board {
 };
 
 struct Client {
-    void init(int board_size) {
-        _board_size = board_size;
-        _cache = Board {board_size};
+    void init() {
+        _cache = Board{};  // reinitialize the board size
+        int n = problem.get_board_size();
         _cache.fill(oil_reservation::undef);
-        _max_request_count = 2*board_size*board_size;
+        _max_request_count = 2*n*n;
     }
     auto max_request_count() { return _max_request_count; }
     oil_reserve_t dig(Point p) {
@@ -166,7 +190,7 @@ struct Client {
         return check;
     }
     void visualize_board(const Board& board) {
-        int n = board.get_board_size();
+        int n = problem.get_board_size();
         for (int i = 0; i < n; i++) {
             for (int j = 0; j < n; j++) {
                 int v = board[i][j];
@@ -181,8 +205,9 @@ struct Client {
         }
     }
     bool validate_board(const Board& board) {
-        for (int i = 0; i < _board_size; i++) {
-            for (int j = 0; j < _board_size; j++) {
+        int n = problem.get_board_size();
+        for (int i = 0; i < n; i++) {
+            for (int j = 0; j < n; j++) {
                 oil_reserve_t v = _cache[i][j];
                 if (v != oil_reservation::undef && board[i][j] != v) {
                     return false;
@@ -221,50 +246,27 @@ struct Client {
         std::snprintf(buf, 8, "#%x%x%x", c, c, c);
         return std::string(buf);
     }
-    int _board_size;
     int _request_count = 0;
     int _max_request_count;
     Board _cache;
 };
 static Client client;
 
-struct Problem {
-    Problem(int board_size, int num_oilfield, double error_param, std::vector<Polyomino> oil_fields)
-        : _board_size(board_size), _num_oilfield(num_oilfield), _error_param(error_param),
-          _oil_fields(oil_fields)
-    {
-        // sort oil fields by are size
-        std::sort(_oil_fields.begin(), _oil_fields.end(),
-                  [](const Polyomino& lhs, const Polyomino& rhs) {
-                        return lhs.get_area() > rhs.get_area();
-                  });
-    }
-    int get_board_size() const { return _board_size; }
-    int get_num_oilfield() const { return _num_oilfield; }
-    double get_error_param() const { return _error_param; }
-    std::vector<Polyomino> get_polyominos() const { return _oil_fields; }
-    private:
-    int _board_size;
-    int _num_oilfield;
-    double _error_param;
-    std::vector<Polyomino> _oil_fields;
-};
-
 struct BruteForceSolver {
-    BruteForceSolver(const Problem& board)
-    : _board(board)
-    {
-        const int n = _board.get_board_size();
+    BruteForceSolver() {
+        const int n = problem.get_board_size();
         for (int i = 0; i < n; i++) {
             _oil_reservations.push_back(std::vector<oil_reserve_t>(n));
         }
     }
     void dig(Point p) {
+        std::cerr << "dig()" << std::endl;
         oil_reserve_t v = client.dig(p);
+        std::cerr << "v: " << std::endl;
         _oil_reservations[p.i][p.j] = v;
     }
     void answer() {
-        const int n = _board.get_board_size();
+        const int n = problem.get_board_size();
         std::vector<Point> oil_points;
         for (int i = 0; i < n; i++) {
             for (int j = 0; j < n; j++) {
@@ -278,7 +280,9 @@ struct BruteForceSolver {
         assert(check == 1);
     }
     void solve() {
-        const int n = _board.get_board_size();
+        std::cerr << "solve()" << std::endl;
+        const int n = problem.get_board_size();
+        std::cerr << "n: " << n << std::endl;
         for (int i = 0; i < n; i++) {
             for (int j = 0; j < n; j++) {
                 Point p {i,j};
@@ -288,46 +292,46 @@ struct BruteForceSolver {
         answer();
     }
     private:
-    Problem _board;
     std::vector<std::vector<oil_reserve_t>> _oil_reservations;
 };
 
 struct PredictModel {
-    PredictModel(double error_param) : _error_param(error_param) {}
-    double mean(int area, int n_oil) const {
-        return (area - n_oil)*_error_param + n_oil*(1 - _error_param);
+    static double mean(int area, int n_oil) {
+        double error_param = problem.get_error_param();
+        return (area - n_oil)*error_param + n_oil*(1 - error_param);
     }
-    double variance(int area) const {
-        return area * _error_param * (1 - _error_param);
+    static double variance(int area) {
+        double error_param = problem.get_error_param();
+        return area * error_param * (1 - error_param);
     }
-    int predict_n_oil(int area, double observation) const {
-        double base = area*_error_param;
-        double slope = 1 - _error_param;
+    static int predict_n_oil(int area, double observation) {
+        double error_param = problem.get_error_param();
+        double base = area*error_param;
+        double slope = 1 - error_param;
         return std::round((observation - base) / slope);
     }
-    private:
-    double _error_param;
 };
 
 // Observe lines (i is fixed)
 struct ProjectionObserver {
-    ProjectionObserver(Direction dir, int board_size, double error_param)
-        : _direction(dir), _board_size(board_size),
-          _num_observation(board_size), _sum(board_size), _var(board_size), _model(error_param),
-          _determined_sum(board_size)
-    {
-        for (int i = 0; i < board_size; i++) {
+    ProjectionObserver(Direction dir) : _direction(dir) {
+        int n = problem.get_board_size();
+        _num_observation.resize(n);
+        _sum.resize(n);
+        _var.resize(n);
+        _determined_sum.resize(n);
+        for (int i = 0; i < n; i++) {
             _determined_sum[i] = oil_reservation::undef;
         }
     }
     void observe_all() {
-        for (int i = 0; i < _board_size; i++) {
+        for (int i = 0; i < problem.get_board_size(); i++) {
             observe_line(i);
         }
     }
     auto make_line_coordinates(int i) {
         std::vector<Point> set;
-        for (int j = 0; j < _board_size; j++) {
+        for (int j = 0; j < problem.get_board_size(); j++) {
             if (_direction == Direction::Horizontal) {
                 set.push_back(Point{i,j});
             }
@@ -342,7 +346,7 @@ struct ProjectionObserver {
         int v = client.predict(set);
         _num_observation[i] += 1;
         _sum[i] += v;
-        _var[i] += _model.variance(_board_size);
+        _var[i] += _model.variance(problem.get_board_size());
     }
     void dig_line(int i) {
         auto set = make_line_coordinates(i);
@@ -357,15 +361,16 @@ struct ProjectionObserver {
         _determined_lines.emplace(i, std::move(values));
     }
     std::vector<int> get_predict_values() const {
+        int n = problem.get_board_size();
         std::vector<int> res;
-        for (int i = 0; i < _board_size; i++) {
+        for (int i = 0; i < n; i++) {
             if (_determined_sum[i] != oil_reservation::undef) {
                 res.push_back(_determined_sum[i]);
             }
             else {
                 double mean = _sum[i] / _num_observation[i];
-                int pred = _model.predict_n_oil(_board_size, mean);
-                pred = std::max(0, std::min(_board_size, pred));
+                int pred = _model.predict_n_oil(n, mean);
+                pred = std::max(0, std::min(n, pred));
                 res.push_back(pred);
             }
         }
@@ -374,7 +379,6 @@ struct ProjectionObserver {
     std::vector<int> get_determined_values() const { return _determined_sum; }
     private:
     Direction _direction;
-    int _board_size;
     PredictModel _model;
     std::vector<int> _num_observation;
     std::vector<double> _sum;  // sum of all observations
@@ -417,7 +421,7 @@ struct ProjectionSolver {
         return new_sol;
     }
     bool validate_solution(const Solution& sol) const {
-        int board_size = _determined_values.size();
+        int board_size = problem.get_board_size();
         for (int j = 0; j < board_size; j++) {
             if (_determined_values[j] >= 0 && sol.rest[j] != 0) {
                 return false;
@@ -432,7 +436,7 @@ struct ProjectionSolver {
     };
     struct BeamSearch {
         BeamSearch(const projection_type& pred, int n_cand, const ProjectionSolver& ref)
-            : _board_size(pred.size()), _n_cand(n_cand), _parent_ref(ref)
+            : _n_cand(n_cand), _parent_ref(ref)
         {
             Solution initial_state;
             initial_state.rest = pred;
@@ -443,7 +447,7 @@ struct ProjectionSolver {
             for (int k = 0; k < n_polyominos; k++) {
                 const auto& proj = projections[k];
                 const int proj_size = proj.size();
-                const int max_offset = _board_size - proj_size;
+                const int max_offset = problem.get_board_size() - proj_size;
                 for (const auto& sol : _frontier) {
                     for (int off = 0; off <= max_offset; off++) {
                         Solution next = _parent_ref.next_solution(sol, proj, off);
@@ -472,7 +476,6 @@ struct ProjectionSolver {
         private:
         using queue_type = std::priority_queue<Solution, std::vector<Solution>, CompareSolution>;
         const ProjectionSolver& _parent_ref;
-        int _board_size;
         int _n_cand;
         std::vector<Solution> _frontier;
         queue_type _candidates;
@@ -502,13 +505,11 @@ struct ProjectionSolver {
 
 struct ProjectionCombinationSolver {
     using projection_type = Polyomino::projection_type;
-    ProjectionCombinationSolver(const Problem& problem)
-        : _problem(problem),
-          _horz_observer(Direction::Horizontal, problem.get_board_size(), problem.get_error_param()),
-          _vert_observer(Direction::Vertical, problem.get_board_size(), problem.get_error_param())
+    ProjectionCombinationSolver()
+        : _horz_observer(Direction::Horizontal), _vert_observer(Direction::Vertical)
     {
         // init projections
-        for (const auto& poly : _problem.get_polyominos()) {
+        for (const auto& poly : problem.get_polyominos()) {
             _horz_projections.push_back(poly.make_projection(Direction::Horizontal));
             _vert_projections.push_back(poly.make_projection(Direction::Vertical));
         }
@@ -579,7 +580,7 @@ struct ProjectionCombinationSolver {
         }
         static std::vector<int> pick_large_variance(const search_results_type& solutions) {
             int num_cand = std::max(solutions.size(), solutions.size()/10);  // top 10%
-            int board_size = solutions[0].rest.size();
+            int board_size = problem.get_board_size();
             std::vector<int> sum(board_size);
             std::vector<int> ssum(board_size);  // square sum
             for (int i = 0; i < num_cand; i++) {
@@ -611,8 +612,8 @@ struct ProjectionCombinationSolver {
     };
     Board restore_board(const Solution& sol) {
         const auto& [horz_offsets, vert_offsets] = sol.get_offsets();
-        Board board(_problem.get_board_size());
-        const auto& polyominos = _problem.get_polyominos();
+        Board board;
+        const auto& polyominos = problem.get_polyominos();
         for (int k = 0; k < polyominos.size(); k++) {
             const auto& poly = polyominos[k];
             int horz_off = horz_offsets[k];
@@ -631,7 +632,7 @@ struct ProjectionCombinationSolver {
         std::cerr << std::endl;
         auto horz_determined = _horz_observer.get_determined_values();
         auto vert_determined = _vert_observer.get_determined_values();
-        auto polyominos = _problem.get_polyominos();
+        auto polyominos = problem.get_polyominos();
         ProjectionSolver horz_solver(horz_pred, _horz_projections, horz_determined);
         ProjectionSolver vert_solver(vert_pred, _vert_projections, vert_determined);
         std::cerr << "search horizontal candidates" << std::endl;
@@ -642,7 +643,7 @@ struct ProjectionCombinationSolver {
         return solution_picker;
     }
     void solve() {
-        const int board_size = _problem.get_board_size();
+        const int board_size = problem.get_board_size();
         const int num_observe = 5;
         const int num_dig_line = (client.max_request_count() - 2*board_size*num_observe)/board_size;
         int dig_idx;
@@ -724,7 +725,6 @@ struct ProjectionCombinationSolver {
         std::cerr << std::endl;
     }
 
-    Problem _problem;
     ProjectionObserver _horz_observer;
     ProjectionObserver _vert_observer;
     // xy projection of polyominos
@@ -732,7 +732,7 @@ struct ProjectionCombinationSolver {
     std::vector<projection_type> _vert_projections;
 };
 
-Problem parse_input() {
+void init_problem() {
     int board_size;
     int num_oilfield;
     double error_param;
@@ -753,22 +753,22 @@ Problem parse_input() {
         oil_fields.push_back(poly);
     }
 
-    Problem problem {board_size, num_oilfield, error_param, oil_fields};
-    return problem;
+    problem.init(board_size, num_oilfield, error_param, oil_fields);
+    client.init();
 }
 
-}
+}  // namespace ahc
 
 int main() {
-    ahc::Problem problem = ahc::parse_input();
-    ahc::client.init(problem.get_board_size());
+    using ahc::problem;
+    ahc::init_problem();
     int m = problem.get_num_oilfield();
     if (m < 10) {
-        ahc::ProjectionCombinationSolver solver(problem);
+        ahc::ProjectionCombinationSolver solver;
         solver.solve();
     }
     else {
-        ahc::BruteForceSolver solver(problem);
+        ahc::BruteForceSolver solver;
         solver.solve();
     }
 }
