@@ -1,6 +1,8 @@
 #include <cstdio>
 #include <cmath>
 #include <cassert>
+#include <type_traits>
+#include <ranges>
 #include <iostream>
 #include <numeric>
 #include <algorithm>
@@ -171,7 +173,8 @@ struct Client {
         _cache[p.i][p.j] = v;
         return v;
     }
-    oil_reserve_t predict(const std::vector<Point>& set) {
+    template <std::ranges::range Range>
+    oil_reserve_t predict(Range&& set) {
         _add_request_count();
         std::string query = construct_vector_query('q', set);
         std::cout << query << std::endl;
@@ -180,7 +183,25 @@ struct Client {
         std::cin >> v;
         return v;
     }
-    int answer(const std::vector<Point>& set) {
+    oil_reserve_t predict_without_known_cells(const std::vector<Point>& set) {
+        std::vector<Point> observe_set;
+        for (auto p : set) {
+            if (_cache[p.i][p.j] >= 0) continue;
+            observe_set.push_back(p);
+        }
+        if (observe_set.empty()) {
+            return 0;
+        }
+        _add_request_count();
+        std::string query = construct_vector_query('q', observe_set);
+        std::cout << query << std::endl;
+
+        oil_reserve_t v;
+        std::cin >> v;
+        return v;
+    }
+    template <std::ranges::range Range>
+    int answer(Range&& set) {
         _add_request_count();
         std::string query = construct_vector_query('a', set);
         std::cout << query << std::endl;
@@ -216,12 +237,24 @@ struct Client {
         }
         return true;
     }
+    oil_reserve_t query_determined_sum(const std::vector<Point>& set) {
+        oil_reserve_t sum = 0;
+        for (auto [i,j] : set) {
+            oil_reserve_t v = _cache[i][j];
+            if (v >= 0) {
+                sum += v;
+            }
+        }
+        return sum;
+    }
     private:
     void _add_request_count() {
         assert(_request_count < _max_request_count);
         _request_count++;
     }
-    static std::string construct_vector_query(char c, const std::vector<Point>& set) {
+    template <std::ranges::range Range>
+    static std::string construct_vector_query(char c, Range&& set) {
+        static_assert(std::is_same_v<std::ranges::range_value_t<Range>, Point>);
         constexpr std::size_t bufsize = 16;
         char buf[16];
         std::snprintf(buf, bufsize, "%c %d", c, (int)set.size());
@@ -229,7 +262,8 @@ struct Client {
         query += point_vector_to_string(set);
         return query;
     }
-    static std::string point_vector_to_string(const std::vector<Point>& set) {
+    template <std::ranges::range Range>
+    static std::string point_vector_to_string(Range&& set) {
         std::string s;
         for (Point p : set) {
             constexpr std::size_t bufsize = 16;
@@ -304,11 +338,74 @@ struct PredictModel {
         double error_param = problem.get_error_param();
         return area * error_param * (1 - error_param);
     }
-    static int predict_n_oil(int area, double observation) {
+    static double raw_expectation(int area, double observation) {
         double error_param = problem.get_error_param();
         double base = area*error_param;
         double slope = 1 - error_param;
-        return std::round((observation - base) / slope);
+        return (observation - base) / slope;
+    }
+    static int predict_n_oil(int area, double observation) {
+        double raw = raw_expectation(area, observation);
+        int pred = std::round(raw);
+        int n = problem.get_board_size();
+        pred = std::max(0, std::min(n, pred));
+        return pred;
+    }
+};
+
+auto make_line_coordinates(Direction dir, int board_size, int i) {
+    std::vector<Point> set;
+    for (int j = 0; j < board_size; j++) {
+        if (dir == Direction::Horizontal) {
+            set.push_back(Point{i,j});
+        }
+        else {
+            set.push_back(Point{j,i});
+        }
+    }
+    return set;
+}
+
+struct PointSetConstructor {
+    static auto all_points() {
+        std::vector<Point> set;
+        int n = problem.get_board_size();
+        for (int i = 0; i < n; i++) {
+            for (int j = 0; j < n; j++) {
+                set.push_back(Point{i,j});
+            }
+        }
+        return set;
+    }
+};
+
+struct NarrowingObserver {
+    // TODO: do not make copy of point_set each time
+    auto find_dense_area(const std::vector<Point>& point_set, std::size_t target_size) {
+        std::size_t n = point_set.size();
+        if (n <= target_size) {
+            return point_set;
+        }
+        std::size_t n1 = n/2;
+        std::size_t n2 = n - n1;
+        auto mid_iter = std::next(point_set.begin(), n1);
+        std::vector<Point> span1(point_set.begin(), mid_iter);
+        std::vector<Point> span2(mid_iter, point_set.end());
+        auto predict_density = [](const auto& span) {
+            int area = span.size();
+            oil_reserve_t v = client.predict(span);
+            double raw_exp = PredictModel::raw_expectation(area, v);
+            double pred = raw_exp - client.query_determined_sum(span);
+            return pred / area;
+        };
+        double rho1 = predict_density(span1);
+        double rho2 = predict_density(span2);
+        if (rho1 > rho2) {
+            return find_dense_area(span1, target_size);
+        }
+        else {
+            return find_dense_area(span2, target_size);
+        }
     }
 };
 
@@ -329,27 +426,16 @@ struct ProjectionObserver {
             observe_line(i);
         }
     }
-    auto make_line_coordinates(int i) {
-        std::vector<Point> set;
-        for (int j = 0; j < problem.get_board_size(); j++) {
-            if (_direction == Direction::Horizontal) {
-                set.push_back(Point{i,j});
-            }
-            else {
-                set.push_back(Point{j,i});
-            }
-        }
-        return set;
-    }
     void observe_line(int i) {
-        auto set = make_line_coordinates(i);
+        auto board_size = problem.get_board_size();
+        auto set = make_line_coordinates(_direction, board_size, i);
         int v = client.predict(set);
         _num_observation[i] += 1;
         _sum[i] += v;
         _var[i] += _model.variance(problem.get_board_size());
     }
     void dig_line(int i) {
-        auto set = make_line_coordinates(i);
+        auto set = make_line_coordinates(_direction, problem.get_board_size(), i);
         std::vector<oil_reserve_t> values;
         oil_reserve_t sum = 0;
         for (auto point : set) {
@@ -370,7 +456,6 @@ struct ProjectionObserver {
             else {
                 double mean = _sum[i] / _num_observation[i];
                 int pred = _model.predict_n_oil(n, mean);
-                pred = std::max(0, std::min(n, pred));
                 res.push_back(pred);
             }
         }
@@ -385,6 +470,106 @@ struct ProjectionObserver {
     std::vector<double> _var;
     std::vector<oil_reserve_t> _determined_sum;
     std::map<int, std::vector<oil_reserve_t>> _determined_lines;
+};
+
+struct BfsSolver {
+    static constexpr int delta[4][2] = {
+        {-1, 0}, {0, 1}, {1, 0}, {0, -1}
+    };
+    BfsSolver() {
+        _board.fill(oil_reservation::undef);
+        for (const auto& poly : problem.get_polyominos()) {
+            _total_reservation += poly.get_area();
+        }
+    }
+    bool boundary_check(Point p) const {
+        int n = problem.get_board_size();
+        return 0 <= p.i && p.i < n && 0 <= p.j && p.j < n;
+    }
+    auto next_point(Point p, std::size_t direction) const {
+        auto [di,dj] = delta[direction];
+        int ni = p.i + di;
+        int nj = p.j + dj;
+        Point next {ni, nj};
+        bool valid = boundary_check(next);
+        return std::make_pair(valid, next);
+    }
+    bool is_marked(Point p) {
+        return _board[p.i][p.j] >= 0;
+    }
+    // returs reservation amounts for the point
+    oil_reserve_t mark_visited(Point p) {
+        if (!is_marked(p)) {
+            oil_reserve_t v = client.dig(p);
+            _board[p.i][p.j] = v;
+            _current_reservation += v;
+        }
+        return _board[p.i][p.j];
+    }
+    bool found_all() {
+        return _current_reservation == _total_reservation;
+    }
+    Point pick_point() {
+        if (_pick_queue.empty()) {
+            auto all_points = PointSetConstructor::all_points();
+            NarrowingObserver observer;
+            const int target_size = 3;
+            auto targets = observer.find_dense_area(all_points, target_size);
+            for (auto p : targets) {
+                _pick_queue.push(p);
+            }
+        }
+        auto p = _pick_queue.front();
+        _pick_queue.pop();
+        return p;
+    }
+    void bfs() {
+        std::queue<Point> queue;
+        Point p = pick_point();
+        if (is_marked(p)) {
+            return;
+        }
+        oil_reserve_t v = mark_visited(p);
+        if (v > 0) {
+            queue.push(p);
+        }
+        while (!queue.empty()) {
+            auto cur = queue.front();
+            queue.pop();
+            for (std::size_t dir = 0; dir < 4; dir++) {
+                auto [valid, next] = next_point(cur, dir);
+                if (valid && !is_marked(next)) {
+                    oil_reserve_t v = mark_visited(next);
+                    if (v > 0) {
+                        queue.push(next);
+                    }
+                }
+            }
+            if (found_all()) {
+                break;
+            }
+        };
+    }
+    bool solve() {
+        int cnt = 0;
+        while (!found_all()) {
+            cnt++;
+            if (cnt > 1000) {
+                std::cerr << "infinite loop detected!" << std::endl;
+                break;
+            }
+            bfs();
+        }
+        auto ans = _board.make_answer();
+        bool check = client.answer(ans);
+        return check;
+    }
+    private:
+    oil_reserve_t _current_reservation = 0;
+    oil_reserve_t _total_reservation = 0;
+    Board _board;
+    // number of non-determined points for each row/col
+    std::queue<Point> _pick_queue;
 };
 
 // Solve 1d histgram to 1d arrangements
@@ -763,12 +948,12 @@ int main() {
     using ahc::problem;
     ahc::init_problem();
     int m = problem.get_num_oilfield();
-    if (m < 10) {
+    if (false) {
         ahc::ProjectionCombinationSolver solver;
         solver.solve();
     }
     else {
-        ahc::BruteForceSolver solver;
+        ahc::BfsSolver solver;
         solver.solve();
     }
 }
