@@ -909,12 +909,23 @@ struct ProjectionCombinationSolver {
     }
     void solve() {
         const int board_size = problem.get_board_size();
-        int iteration = 0;
-        while (true) {
+        int max_iteration = 1000;
+        for (int iteration = 0; iteration < max_iteration; iteration++) {
             util::print_hline();
-            std::cerr << iteration++ << "th iter start" << std::endl;
+            std::cerr << iteration << "th iter start" << std::endl;
             // observe all rows + cols
             observe_all();
+
+            // try submitting before digging (only for first iteration)
+            if (iteration == 0) {
+                auto solution_picker = make_candidates();
+                auto [_, sol] = pick_valid_solution(solution_picker);
+                debug_print_solution(sol);
+                Board board = Board::from_offsets(sol.horz_offsets, sol.vert_offsets);
+                bool success = submit_answer(board);
+                std::cerr << "success on first try!" << std::endl;
+                if (success) return;
+            }
 
             // generate solution candidates and filter them by pinpoint observation
             auto solution_picker = make_candidates();
