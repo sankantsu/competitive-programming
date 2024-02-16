@@ -9,7 +9,6 @@
 #include <vector>
 #include <string>
 #include <queue>
-#include <map>
 
 namespace util {
 
@@ -128,7 +127,7 @@ struct Board {
             _data[i*_board_size + j]++;
         }
     }
-    std::vector<Point> make_answer() {
+    std::vector<Point> make_answer() const {
         std::vector<Point> ans;
         for (int i = 0; i < _board_size; i++) {
             for (int j = 0; j < _board_size; j++) {
@@ -139,6 +138,18 @@ struct Board {
             }
         }
         return ans;
+    }
+    template <std::ranges::random_access_range Offsets>
+    static Board from_offsets(Offsets&& horz_offsets, Offsets&& vert_offsets) {
+        Board board;
+        const auto& polyominos = problem.get_polyominos();
+        for (int k = 0; k < polyominos.size(); k++) {
+            const auto& poly = polyominos[k];
+            int horz_off = horz_offsets[k];
+            int vert_off = vert_offsets[k];
+            board.add_polyomino(poly, horz_off, vert_off);
+        }
+        return board;
     }
     private:
     int _board_size;
@@ -211,17 +222,26 @@ struct Client {
         return check;
     }
     void visualize_board(const Board& board) {
+        clear_colors();
         int n = problem.get_board_size();
         for (int i = 0; i < n; i++) {
             for (int j = 0; j < n; j++) {
+                Point p {i, j};
                 int v = board[i][j];
-                std::string color = "#ffffff";  // default
                 if (v > 0) {
-                    color = oil_amount_to_color(v);
+                    std::string color = oil_amount_to_color(v);
+                    _write_color_query(p, color);
                 }
-                char query[32];
-                std::snprintf(query, 32, "#c %d %d %s", i, j, color.c_str());
-                std::cout << query << std::endl;
+            }
+        }
+    }
+    void clear_colors() {
+        int n = problem.get_board_size();
+        for (int i = 0; i < n; i++) {
+            for (int j = 0; j < n; j++) {
+                Point p {i, j};
+                std::string color = "#ffffff";  // default
+                _write_color_query(p, color);
             }
         }
     }
@@ -251,6 +271,15 @@ struct Client {
     void _add_request_count() {
         assert(_request_count < _max_request_count);
         _request_count++;
+    }
+    static std::string _construct_color_query(Point p, const std::string& color) {
+        char query[32];
+        std::snprintf(query, 32, "#c %d %d %s", p.i, p.j, color.c_str());
+        return std::string(query);
+    }
+    static void _write_color_query(Point p, const std::string& color) {
+        auto query = _construct_color_query(p, color);
+        std::cout << query << std::endl;
     }
     template <std::ranges::range Range>
     static std::string construct_vector_query(char c, Range&& set) {
@@ -416,10 +445,6 @@ struct ProjectionObserver {
         _num_observation.resize(n);
         _sum.resize(n);
         _var.resize(n);
-        _determined_sum.resize(n);
-        for (int i = 0; i < n; i++) {
-            _determined_sum[i] = oil_reservation::undef;
-        }
     }
     void observe_all() {
         for (int i = 0; i < problem.get_board_size(); i++) {
@@ -434,42 +459,22 @@ struct ProjectionObserver {
         _sum[i] += v;
         _var[i] += _model.variance(problem.get_board_size());
     }
-    void dig_line(int i) {
-        auto set = make_line_coordinates(_direction, problem.get_board_size(), i);
-        std::vector<oil_reserve_t> values;
-        oil_reserve_t sum = 0;
-        for (auto point : set) {
-            oil_reserve_t v = client.dig(point);
-            values.push_back(v);
-            sum += v;
-        }
-        _determined_sum[i] = sum;
-        _determined_lines.emplace(i, std::move(values));
-    }
     std::vector<int> get_predict_values() const {
         int n = problem.get_board_size();
         std::vector<int> res;
         for (int i = 0; i < n; i++) {
-            if (_determined_sum[i] != oil_reservation::undef) {
-                res.push_back(_determined_sum[i]);
-            }
-            else {
-                double mean = _sum[i] / _num_observation[i];
-                int pred = _model.predict_n_oil(n, mean);
-                res.push_back(pred);
-            }
+            double mean = _sum[i] / _num_observation[i];
+            int pred = _model.predict_n_oil(n, mean);
+            res.push_back(pred);
         }
         return res;
     }
-    std::vector<int> get_determined_values() const { return _determined_sum; }
     private:
     Direction _direction;
     PredictModel _model;
     std::vector<int> _num_observation;
     std::vector<double> _sum;  // sum of all observations
     std::vector<double> _var;
-    std::vector<oil_reserve_t> _determined_sum;
-    std::map<int, std::vector<oil_reserve_t>> _determined_lines;
 };
 
 struct BfsSolver {
@@ -584,15 +589,9 @@ struct ProjectionSolver {
         projection_type rest;
     };
     int calc_penalty(const std::vector<oil_reserve_t>& rest) const {
-        constexpr int inf_penalty = 1000000;
         int penalty = 0;
         for (int j = 0; j < rest.size(); j++) {
-            if (rest[j] < 0 && _determined_values[j] >= 0) {
-                penalty += inf_penalty;
-            }
-            else if (rest[j] < 0) {
-                penalty += rest[j]*(rest[j]-1);
-            }
+            penalty += rest[j]*(rest[j]-1);
         }
         return penalty;
     }
@@ -607,8 +606,16 @@ struct ProjectionSolver {
     }
     bool validate_solution(const Solution& sol) const {
         int board_size = problem.get_board_size();
+        std::vector<oil_reserve_t> hist(board_size);
+        for (int k = 0; k < _projections.size(); k++) {
+            const auto& proj = _projections[k];
+            auto offset = sol.offsets[k];
+            for (int j = 0; j < proj.size(); j++) {
+                hist[offset+j] += proj[j];
+            }
+        }
         for (int j = 0; j < board_size; j++) {
-            if (_determined_values[j] >= 0 && sol.rest[j] != 0) {
+            if (_determined_values[j] > 0 && hist[j] < _determined_values[j]) {
                 return false;
             }
         }
@@ -725,7 +732,7 @@ struct ProjectionCombinationSolver {
                 return std::make_pair(false,Solution{});
             }
             auto [i,j] = _indices[_current_rank++];
-            std::cerr << "rank, i,j: " << _current_rank << ", " << i << ", " << j << std::endl;
+            /* std::cerr << "rank, i,j: " << _current_rank << ", " << i << ", " << j << std::endl; */
             int horz_penalty = _horz_solutions[i].penalty;
             int vert_penalty = _vert_solutions[j].penalty;
             const auto& horz_offsets = _horz_solutions[i].offsets;
@@ -733,19 +740,68 @@ struct ProjectionCombinationSolver {
             Solution sol { horz_penalty, vert_penalty, horz_offsets, vert_offsets };
             return std::make_pair(true, std::move(sol));
         }
-        int consider_dig_index(Direction dir) const {
-            if (dir == Direction::Horizontal) {
-                return pick_large_variance(_horz_solutions)[0];
+        // returns number of remaining candidates
+        int dig_pinpoint() {
+            constexpr int num_max_compare = 10;
+            int num_refill = num_max_compare - _simulated_boards.size();
+            int num_pushed = 0;
+            while (num_pushed < num_refill) {
+                if (_num_simulated >= _indices.size()) {
+                    // run out of all candidates
+                    break;
+                }
+                auto [i,j] = _indices[_num_simulated++];
+                const auto& horz_offsets = _horz_solutions[i].offsets;
+                const auto& vert_offsets = _vert_solutions[j].offsets;
+                auto b = Board::from_offsets(horz_offsets, vert_offsets);
+                if (client.validate_board(b)) {
+                    _simulated_boards.push_back(std::move(b));
+                    num_pushed++;
+                }
             }
-            else {
-                return pick_large_variance(_vert_solutions)[0];
+            int remaining = _indices.size() - _num_simulated;
+            // minimum number of candidates which can be discarded after pinpoint observation
+            int num_comparing = _simulated_boards.size();
+            if (num_comparing <= 1) {
+                std::cerr << "No candidates for comparation!" << std::endl;
+                return remaining;
             }
+            int max_score = -1;
+            Point dig_point;
+            int n = problem.get_board_size();
+            for (int i = 0; i < n; i++) {
+                for (int j = 0; j < n; j++) {
+                    std::vector<int> hist(n+1);
+                    for (int rank = 0; rank < num_comparing; rank++) {
+                        oil_reserve_t v = _simulated_boards[rank][i][j];
+                        hist[v]++;
+                    }
+                    int score = num_comparing - *std::max_element(hist.begin(), hist.end());
+                    if (score > max_score) {
+                        max_score = score;
+                        dig_point = Point{i,j};
+                    }
+                }
+            }
+            std::cerr << "dig: " << dig_point.i << ", " << dig_point.j << std::endl;
+            oil_reserve_t v = client.dig(dig_point);
+            // invalidate boards
+            for (int rank = num_comparing - 1; rank >= 0; rank--) {
+                auto [i,j] = dig_point;
+                if (_simulated_boards[rank][i][j] != v) {
+                    _simulated_boards.erase(std::next(_simulated_boards.begin(), rank));
+                }
+            }
+            std::cerr << "reduced " << num_comparing << " candidates to " << _simulated_boards.size() << std::endl;
+            return remaining;
         }
         private:
         void _make_indices() {
             _indices.clear();
-            const int num_horz_cand = std::min(20ul, _horz_solutions.size());
-            const int num_vert_cand = std::min(20ul, _vert_solutions.size());
+            const int m = problem.get_num_oilfield();
+            const std::size_t num_cand_1d = 2*m*m;
+            const int num_horz_cand = std::min(num_cand_1d, _horz_solutions.size());
+            const int num_vert_cand = std::min(num_cand_1d, _vert_solutions.size());
             for (int i = 0; i < num_horz_cand; i++) {
                 for (int j = 0; j < num_vert_cand; j++) {
                     _indices.emplace_back(i,j);
@@ -790,92 +846,100 @@ struct ProjectionCombinationSolver {
             return res;
         }
         std::size_t _current_rank = 0;
+        std::size_t _num_simulated = 0;
         index_t _idx;
         std::vector<index_t> _indices;
         search_results_type _horz_solutions;
         search_results_type _vert_solutions;
+        std::vector<Board> _simulated_boards;
     };
-    Board restore_board(const Solution& sol) {
-        const auto& [horz_offsets, vert_offsets] = sol.get_offsets();
-        Board board;
-        const auto& polyominos = problem.get_polyominos();
-        for (int k = 0; k < polyominos.size(); k++) {
-            const auto& poly = polyominos[k];
-            int horz_off = horz_offsets[k];
-            int vert_off = vert_offsets[k];
-            board.add_polyomino(poly, horz_off, vert_off);
-        }
-        return board;
-    }
     SolutionPicker make_candidates() {
-        auto horz_pred = _horz_observer.get_predict_values();
-        auto vert_pred = _vert_observer.get_predict_values();
-        std::cerr << "horz_pred = ";
-        util::print_vector(horz_pred);
-        std::cerr << ", vert_pred = ";
-        util::print_vector(vert_pred);
-        std::cerr << std::endl;
-        auto horz_determined = _horz_observer.get_determined_values();
-        auto vert_determined = _vert_observer.get_determined_values();
-        auto polyominos = problem.get_polyominos();
-        ProjectionSolver horz_solver(horz_pred, _horz_projections, horz_determined);
-        ProjectionSolver vert_solver(vert_pred, _vert_projections, vert_determined);
-        std::cerr << "search horizontal candidates" << std::endl;
-        auto horz_solutions = horz_solver.solve();
-        std::cerr << "search vertical candidates" << std::endl;
-        auto vert_solutions = vert_solver.solve();
+        auto solve_1d = [](Direction dir, auto& observer, auto& projections) {
+            std::string dir_str = (dir == Direction::Horizontal) ? "horz" : "vert";
+            auto pred = observer.get_predict_values();
+            std::cerr << dir_str << " pred: ";
+            util::print_vector(pred);
+            std::cerr << std::endl;
+
+            int n = problem.get_board_size();
+            std::vector<oil_reserve_t> determined;
+            for (int i = 0; i < n; i++) {
+                auto line = make_line_coordinates(dir, n, i);
+                oil_reserve_t v = client.query_determined_sum(line);
+                determined.push_back(v);
+            }
+            std::cerr << "determined: "; util::print_vector(determined); std::cerr << std::endl;
+            ProjectionSolver solver(pred, projections, determined);
+            std::cerr << "search " << dir_str << " candidates" << std::endl;
+            auto solutions = solver.solve();
+            return solutions;
+        };
+        auto horz_solutions = solve_1d(Direction::Horizontal, _horz_observer, _horz_projections);
+        auto vert_solutions = solve_1d(Direction::Vertical, _vert_observer, _vert_projections);
         SolutionPicker solution_picker(std::move(horz_solutions), std::move(vert_solutions));
         return solution_picker;
     }
+    auto pick_valid_solution(SolutionPicker& solution_picker) {
+        auto [valid, sol] = solution_picker.pick();
+        if (!valid) {
+            return std::make_pair(false, sol);
+        }
+        auto board = Board::from_offsets(sol.horz_offsets, sol.vert_offsets);
+        if (client.validate_board(board)) {
+            return std::make_pair(true, sol);
+        }
+        // retry
+        return pick_valid_solution(solution_picker);
+    }
+    bool submit_answer(const Board& board) {
+        std::cerr << "Submit an answer... ";
+        client.clear_colors();
+        auto ans = board.make_answer();
+        int check = client.answer(ans);
+        if (check == 1) {
+            // successfully found all oils
+            std::cerr << "success" << std::endl;
+            return true;
+        }
+        else {
+            std::cerr << "failed" << std::endl;
+            client.visualize_board(board);
+        }
+        return false;
+    }
     void solve() {
         const int board_size = problem.get_board_size();
-        const int num_observe = 5;
-        const int num_dig_line = (client.max_request_count() - 2*board_size*num_observe)/board_size;
-        int dig_idx;
-        Direction dig_dir = Direction::Horizontal;
-        auto switch_direction = [&dig_dir] {
-            dig_dir = (dig_dir == Direction::Horizontal) ? Direction::Vertical
-                                                         : Direction::Horizontal;
-        };
-        for (int i = 0; i < num_observe + num_dig_line; i++) {
+        int iteration = 0;
+        while (true) {
             util::print_hline();
-            std::cerr << i << "th iter start" << std::endl;
-            if (i < num_observe) {
-                observe_all();
-            }
-            else {
-                dig_line(dig_dir, dig_idx);
-                switch_direction();
-            }
+            std::cerr << iteration++ << "th iter start" << std::endl;
+            // observe all rows + cols
+            observe_all();
+
+            // generate solution candidates and filter them by pinpoint observation
             auto solution_picker = make_candidates();
-            dig_idx = solution_picker.consider_dig_index(dig_dir);
+            while(true) {
+                int remaining = solution_picker.dig_pinpoint();
+                std::cerr << "remaining: " << remaining << std::endl;
+                if (remaining == 0) {
+                    break;
+                }
+            }
             constexpr int num_challenge = 1;
             for (int i = 0; i < num_challenge; i++) {
                 std::cerr << "try: " << i+1 << std::endl;
-                Board board;
-                bool check_ans = true;
-                while (true) {
-                    auto [valid, sol] = solution_picker.pick();
-                    check_ans = check_ans & valid;
-                    if (!valid) break;
-                    board = restore_board(sol);
-                    if (!client.validate_board(board)) {
-                        continue;
-                    }
-                    break;
+                auto [valid, sol] = pick_valid_solution(solution_picker);
+                if (valid) {
+                    debug_print_solution(sol);
+                    Board board = Board::from_offsets(sol.horz_offsets, sol.vert_offsets);
+                    bool success = submit_answer(board);
+                    if (success) return;
                 }
-                if (check_ans) {
-                    std::cerr << "Submit an answer... ";
-                    auto ans = board.make_answer();
-                    int check = client.answer(ans);
-                    if (check == 1) {  // successfully found all oils
-                        std::cerr << "success" << std::endl;
-                        return;
-                    }
-                    else {
-                        std::cerr << "failed" << std::endl;
-                        client.visualize_board(board);
-                    }
+                std::cerr << "debug: check remaining valid solutions..." << std::endl;
+                while (true) {
+                    auto [valid, sol] = pick_valid_solution(solution_picker);
+                    if (!valid) break;
+                    debug_print_solution(sol);
                 }
             }
         }
@@ -886,14 +950,6 @@ struct ProjectionCombinationSolver {
     void observe_all() {
         _horz_observer.observe_all();
         _vert_observer.observe_all();
-    }
-    void dig_line(Direction dir, int idx) {
-        if (dir == Direction::Horizontal) {
-            _horz_observer.dig_line(idx);
-        }
-        else {
-            _vert_observer.dig_line(idx);
-        }
     }
     void debug_print_solution(const Solution& sol) {
         auto [horz_penalty, vert_penalty] = sol.get_penalties();
