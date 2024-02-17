@@ -74,6 +74,14 @@ struct Polyomino {
         }
         return proj;
     }
+    bool contains(Point point) const {
+        for (auto p : _relative_positions) {
+            if (p.i == point.i && p.j == point.j) {
+                return true;
+            }
+        }
+        return false;
+    }
     private:
     int _area;
     std::vector<Point> _relative_positions;
@@ -182,6 +190,7 @@ struct Client {
         oil_reserve_t v;
         std::cin >> v;
         _cache[p.i][p.j] = v;
+        _known_points.emplace_back(p, v);
         return v;
     }
     template <std::ranges::range Range>
@@ -257,6 +266,27 @@ struct Client {
         }
         return true;
     }
+    template <typename Range>
+    bool validate_solution(const Range& horz_offsets, const Range& vert_offsets) {
+        const auto& polyominos = problem.get_polyominos();
+        for (auto [p,v] : _known_points) {
+            oil_reserve_t pred = 0;
+            auto [i,j] = p;
+            for (std::size_t k = 0; k < horz_offsets.size(); k++) {
+                const auto& poly = polyominos[k];
+                int rel_i = i - horz_offsets[k];
+                int rel_j = j - vert_offsets[k];
+                Point rel {rel_i, rel_j};
+                if (poly.contains(rel)) {
+                    pred++;
+                }
+            }
+            if (pred != v) {
+                return false;
+            }
+        }
+        return true;
+    }
     oil_reserve_t query_determined_sum(const std::vector<Point>& set) {
         oil_reserve_t sum = 0;
         for (auto [i,j] : set) {
@@ -311,6 +341,8 @@ struct Client {
     }
     int _request_count = 0;
     int _max_request_count;
+    using known_point = std::pair<Point, oil_reserve_t>;
+    std::vector<known_point> _known_points;
     Board _cache;
 };
 static Client client;
@@ -726,13 +758,13 @@ struct ProjectionCombinationSolver {
         {
             _make_indices();
             _sort_indices();
+            _filter_indices();
         }
         auto pick() {
-            if (_current_rank >= _indices.size()) {
+            if (_indices.size() == 0) {
                 return std::make_pair(false,Solution{});
             }
-            auto [i,j] = _indices[_current_rank++];
-            /* std::cerr << "rank, i,j: " << _current_rank << ", " << i << ", " << j << std::endl; */
+            auto [i,j] = _indices[0];
             int horz_penalty = _horz_solutions[i].penalty;
             int vert_penalty = _vert_solutions[j].penalty;
             const auto& horz_offsets = _horz_solutions[i].offsets;
@@ -742,41 +774,34 @@ struct ProjectionCombinationSolver {
         }
         // returns number of remaining candidates
         int dig_pinpoint() {
-            constexpr int num_max_compare = 10;
-            int num_refill = num_max_compare - _simulated_boards.size();
-            int num_pushed = 0;
-            while (num_pushed < num_refill) {
-                if (_num_simulated >= _indices.size()) {
-                    // run out of all candidates
-                    break;
-                }
-                auto [i,j] = _indices[_num_simulated++];
+            constexpr std::size_t num_max_compare = 1000;
+            std::vector<Board> simulated_boards;
+            std::size_t num_compare = std::min(num_max_compare, _indices.size());
+            if (num_compare <= 1) {
+                std::cerr << "No candidates for comparation!" << std::endl;
+                return 0;
+            }
+            for (std::size_t rank = 0; rank < num_compare; rank++) {
+                auto [i,j] = _indices[rank];
                 const auto& horz_offsets = _horz_solutions[i].offsets;
                 const auto& vert_offsets = _vert_solutions[j].offsets;
-                auto b = Board::from_offsets(horz_offsets, vert_offsets);
-                if (client.validate_board(b)) {
-                    _simulated_boards.push_back(std::move(b));
-                    num_pushed++;
-                }
+                assert(client.validate_solution(horz_offsets, vert_offsets));
+                Board b = Board::from_offsets(horz_offsets, vert_offsets);
+                simulated_boards.push_back(std::move(b));
             }
-            int remaining = _indices.size() - _num_simulated;
+            int remaining = _indices.size() - num_compare;
             // minimum number of candidates which can be discarded after pinpoint observation
-            int num_comparing = _simulated_boards.size();
-            if (num_comparing <= 1) {
-                std::cerr << "No candidates for comparation!" << std::endl;
-                return remaining;
-            }
             int max_score = -1;
             Point dig_point;
             int n = problem.get_board_size();
             for (int i = 0; i < n; i++) {
                 for (int j = 0; j < n; j++) {
                     std::vector<int> hist(n+1);
-                    for (int rank = 0; rank < num_comparing; rank++) {
-                        oil_reserve_t v = _simulated_boards[rank][i][j];
+                    for (int rank = 0; rank < num_compare; rank++) {
+                        oil_reserve_t v = simulated_boards[rank][i][j];
                         hist[v]++;
                     }
-                    int score = num_comparing - *std::max_element(hist.begin(), hist.end());
+                    int score = num_compare - *std::max_element(hist.begin(), hist.end());
                     if (score > max_score) {
                         max_score = score;
                         dig_point = Point{i,j};
@@ -786,13 +811,7 @@ struct ProjectionCombinationSolver {
             std::cerr << "dig: " << dig_point.i << ", " << dig_point.j << std::endl;
             oil_reserve_t v = client.dig(dig_point);
             // invalidate boards
-            for (int rank = num_comparing - 1; rank >= 0; rank--) {
-                auto [i,j] = dig_point;
-                if (_simulated_boards[rank][i][j] != v) {
-                    _simulated_boards.erase(std::next(_simulated_boards.begin(), rank));
-                }
-            }
-            std::cerr << "reduced " << num_comparing << " candidates to " << _simulated_boards.size() << std::endl;
+            _filter_indices();
             return remaining;
         }
         private:
@@ -807,7 +826,6 @@ struct ProjectionCombinationSolver {
                     _indices.emplace_back(i,j);
                 }
             }
-            std::cerr << "_indices.size(): " << _indices.size() << std::endl;
         }
         void _sort_indices() {
             auto compare = [this](index_t idx1, index_t idx2) {
@@ -818,6 +836,19 @@ struct ProjectionCombinationSolver {
                 return p1 < p2;
             };
             std::sort(_indices.begin(), _indices.end(), compare);
+        }
+        void _filter_indices() {
+            std::vector<index_t> valid_indices;
+            for (auto [i,j] : _indices) {
+                const auto& horz_offsets = _horz_solutions[i].offsets;
+                const auto& vert_offsets = _vert_solutions[j].offsets;
+                bool valid = client.validate_solution(horz_offsets, vert_offsets);
+                if (valid) {
+                    valid_indices.emplace_back(i, j);
+                }
+            }
+            _indices = valid_indices;
+            std::cerr << "Number of remaining indices: " << _indices.size() << std::endl;
         }
         static std::vector<int> pick_large_variance(const search_results_type& solutions) {
             int num_cand = std::max(solutions.size(), solutions.size()/10);  // top 10%
@@ -845,13 +876,9 @@ struct ProjectionCombinationSolver {
             std::copy(indices.begin(), std::next(indices.begin(), num_remeasurement), res.begin());
             return res;
         }
-        std::size_t _current_rank = 0;
-        std::size_t _num_simulated = 0;
-        index_t _idx;
         std::vector<index_t> _indices;
         search_results_type _horz_solutions;
         search_results_type _vert_solutions;
-        std::vector<Board> _simulated_boards;
     };
     SolutionPicker make_candidates() {
         auto solve_1d = [](Direction dir, auto& observer, auto& projections) {
@@ -879,18 +906,6 @@ struct ProjectionCombinationSolver {
         SolutionPicker solution_picker(std::move(horz_solutions), std::move(vert_solutions));
         return solution_picker;
     }
-    auto pick_valid_solution(SolutionPicker& solution_picker) {
-        auto [valid, sol] = solution_picker.pick();
-        if (!valid) {
-            return std::make_pair(false, sol);
-        }
-        auto board = Board::from_offsets(sol.horz_offsets, sol.vert_offsets);
-        if (client.validate_board(board)) {
-            return std::make_pair(true, sol);
-        }
-        // retry
-        return pick_valid_solution(solution_picker);
-    }
     bool submit_answer(const Board& board) {
         std::cerr << "Submit an answer... ";
         client.clear_colors();
@@ -916,19 +931,22 @@ struct ProjectionCombinationSolver {
             // observe all rows + cols
             observe_all();
 
+            // generate valid solution candidates
+            auto solution_picker = make_candidates();
+
             // try submitting before digging (only for first iteration)
             if (iteration == 0) {
-                auto solution_picker = make_candidates();
-                auto [_, sol] = pick_valid_solution(solution_picker);
+                auto [_, sol] = solution_picker.pick();
                 debug_print_solution(sol);
                 Board board = Board::from_offsets(sol.horz_offsets, sol.vert_offsets);
                 bool success = submit_answer(board);
-                std::cerr << "success on first try!" << std::endl;
-                if (success) return;
+                if (success) {
+                    std::cerr << "success on first try!" << std::endl;
+                    return;
+                }
             }
 
             // generate solution candidates and filter them by pinpoint observation
-            auto solution_picker = make_candidates();
             while(true) {
                 int remaining = solution_picker.dig_pinpoint();
                 std::cerr << "remaining: " << remaining << std::endl;
@@ -939,18 +957,12 @@ struct ProjectionCombinationSolver {
             constexpr int num_challenge = 1;
             for (int i = 0; i < num_challenge; i++) {
                 std::cerr << "try: " << i+1 << std::endl;
-                auto [valid, sol] = pick_valid_solution(solution_picker);
+                auto [valid, sol] = solution_picker.pick();
                 if (valid) {
                     debug_print_solution(sol);
                     Board board = Board::from_offsets(sol.horz_offsets, sol.vert_offsets);
                     bool success = submit_answer(board);
                     if (success) return;
-                }
-                std::cerr << "debug: check remaining valid solutions..." << std::endl;
-                while (true) {
-                    auto [valid, sol] = pick_valid_solution(solution_picker);
-                    if (!valid) break;
-                    debug_print_solution(sol);
                 }
             }
         }
