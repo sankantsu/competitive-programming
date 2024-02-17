@@ -727,6 +727,150 @@ struct ProjectionSolver {
     std::vector<oil_reserve_t> _determined_values;
 };
 
+struct Solution {
+    int horz_penalty;
+    int vert_penalty;
+    std::vector<int> horz_offsets;
+    std::vector<int> vert_offsets;
+    auto get_penalties() const {
+        return std::make_pair(horz_penalty, vert_penalty);
+    }
+    auto get_offsets() const {
+        return std::make_pair(horz_offsets, vert_offsets);
+    }
+};
+
+struct SolutionPicker {
+    using index_t = std::pair<int,int>;  // index to horz solutions and vert solutions
+    using search_results_type = std::vector<ProjectionSolver::Solution>;
+    SolutionPicker(search_results_type&& horz_solutions, search_results_type&& vert_solutions)
+        : _horz_solutions(horz_solutions), _vert_solutions(vert_solutions)
+    {
+        _make_indices();
+        _sort_indices();
+        _filter_indices();
+    }
+    auto pick() {
+        if (_indices.size() == 0) {
+            return std::make_pair(false,Solution{});
+        }
+        auto [i,j] = _indices[0];
+        int horz_penalty = _horz_solutions[i].penalty;
+        int vert_penalty = _vert_solutions[j].penalty;
+        const auto& horz_offsets = _horz_solutions[i].offsets;
+        const auto& vert_offsets = _vert_solutions[j].offsets;
+        Solution sol { horz_penalty, vert_penalty, horz_offsets, vert_offsets };
+        return std::make_pair(true, std::move(sol));
+    }
+    // returns number of remaining candidates
+    int dig_pinpoint() {
+        constexpr std::size_t num_max_compare = 1000;
+        std::vector<Board> simulated_boards;
+        std::size_t num_compare = std::min(num_max_compare, _indices.size());
+        if (num_compare <= 1) {
+            std::cerr << "No candidates for comparation!" << std::endl;
+            return 0;
+        }
+        for (std::size_t rank = 0; rank < num_compare; rank++) {
+            auto [i,j] = _indices[rank];
+            const auto& horz_offsets = _horz_solutions[i].offsets;
+            const auto& vert_offsets = _vert_solutions[j].offsets;
+            assert(client.validate_solution(horz_offsets, vert_offsets));
+            Board b = Board::from_offsets(horz_offsets, vert_offsets);
+            simulated_boards.push_back(std::move(b));
+        }
+        int remaining = _indices.size() - num_compare;
+        // minimum number of candidates which can be discarded after pinpoint observation
+        int max_score = -1;
+        Point dig_point;
+        int n = problem.get_board_size();
+        for (int i = 0; i < n; i++) {
+            for (int j = 0; j < n; j++) {
+                std::vector<int> hist(n+1);
+                for (int rank = 0; rank < num_compare; rank++) {
+                    oil_reserve_t v = simulated_boards[rank][i][j];
+                    hist[v]++;
+                }
+                int score = num_compare - *std::max_element(hist.begin(), hist.end());
+                if (score > max_score) {
+                    max_score = score;
+                    dig_point = Point{i,j};
+                }
+            }
+        }
+        std::cerr << "dig: " << dig_point.i << ", " << dig_point.j << std::endl;
+        oil_reserve_t v = client.dig(dig_point);
+        // invalidate boards
+        _filter_indices();
+        return remaining;
+    }
+    private:
+    void _make_indices() {
+        _indices.clear();
+        const int m = problem.get_num_oilfield();
+        const std::size_t num_cand_1d = 2*m*m;
+        const int num_horz_cand = std::min(num_cand_1d, _horz_solutions.size());
+        const int num_vert_cand = std::min(num_cand_1d, _vert_solutions.size());
+        for (int i = 0; i < num_horz_cand; i++) {
+            for (int j = 0; j < num_vert_cand; j++) {
+                _indices.emplace_back(i,j);
+            }
+        }
+    }
+    void _sort_indices() {
+        auto compare = [this](index_t idx1, index_t idx2) {
+            auto [i1,j1] = idx1;
+            auto [i2,j2] = idx2;
+            auto p1 = _horz_solutions[i1].penalty + _vert_solutions[j1].penalty;
+            auto p2 = _horz_solutions[i2].penalty + _vert_solutions[j2].penalty;
+            return p1 < p2;
+        };
+        std::sort(_indices.begin(), _indices.end(), compare);
+    }
+    void _filter_indices() {
+        std::vector<index_t> valid_indices;
+        for (auto [i,j] : _indices) {
+            const auto& horz_offsets = _horz_solutions[i].offsets;
+            const auto& vert_offsets = _vert_solutions[j].offsets;
+            bool valid = client.validate_solution(horz_offsets, vert_offsets);
+            if (valid) {
+                valid_indices.emplace_back(i, j);
+            }
+        }
+        _indices = valid_indices;
+        std::cerr << "Number of remaining indices: " << _indices.size() << std::endl;
+    }
+    static std::vector<int> pick_large_variance(const search_results_type& solutions) {
+        int num_cand = std::max(solutions.size(), solutions.size()/10);  // top 10%
+        int board_size = problem.get_board_size();
+        std::vector<int> sum(board_size);
+        std::vector<int> ssum(board_size);  // square sum
+        for (int i = 0; i < num_cand; i++) {
+            const auto& rest = solutions[i].rest;
+            for (int j = 0; j < board_size; j++) {
+                sum[j] += rest[j];
+                ssum[j] += rest[j]*rest[j];
+            }
+        }
+        std::vector<int> non_normalized_var(board_size);
+        for (int j = 0; j < board_size; j++) {
+            non_normalized_var[j] = num_cand*ssum[j] - sum[j]*sum[j];
+        }
+        // index sort
+        std::vector<int> indices(non_normalized_var.size());
+        std::iota(indices.begin(), indices.end(), 0);
+        std::sort(indices.begin(), indices.end(),
+                  [&non_normalized_var](size_t i, size_t j){ return non_normalized_var[i] > non_normalized_var[j]; });
+        int num_remeasurement = board_size*4/5;
+        std::vector<int> res(num_remeasurement);
+        std::copy(indices.begin(), std::next(indices.begin(), num_remeasurement), res.begin());
+        return res;
+    }
+    std::vector<index_t> _indices;
+    search_results_type _horz_solutions;
+    search_results_type _vert_solutions;
+};
+
 struct ProjectionCombinationSolver {
     using projection_type = Polyomino::projection_type;
     ProjectionCombinationSolver()
@@ -738,148 +882,6 @@ struct ProjectionCombinationSolver {
             _vert_projections.push_back(poly.make_projection(Direction::Vertical));
         }
     }
-    struct Solution {
-        int horz_penalty;
-        int vert_penalty;
-        std::vector<int> horz_offsets;
-        std::vector<int> vert_offsets;
-        auto get_penalties() const {
-            return std::make_pair(horz_penalty, vert_penalty);
-        }
-        auto get_offsets() const {
-            return std::make_pair(horz_offsets, vert_offsets);
-        }
-    };
-    struct SolutionPicker {
-        using index_t = std::pair<int,int>;  // index to horz solutions and vert solutions
-        using search_results_type = std::vector<ProjectionSolver::Solution>;
-        SolutionPicker(search_results_type&& horz_solutions, search_results_type&& vert_solutions)
-            : _horz_solutions(horz_solutions), _vert_solutions(vert_solutions)
-        {
-            _make_indices();
-            _sort_indices();
-            _filter_indices();
-        }
-        auto pick() {
-            if (_indices.size() == 0) {
-                return std::make_pair(false,Solution{});
-            }
-            auto [i,j] = _indices[0];
-            int horz_penalty = _horz_solutions[i].penalty;
-            int vert_penalty = _vert_solutions[j].penalty;
-            const auto& horz_offsets = _horz_solutions[i].offsets;
-            const auto& vert_offsets = _vert_solutions[j].offsets;
-            Solution sol { horz_penalty, vert_penalty, horz_offsets, vert_offsets };
-            return std::make_pair(true, std::move(sol));
-        }
-        // returns number of remaining candidates
-        int dig_pinpoint() {
-            constexpr std::size_t num_max_compare = 1000;
-            std::vector<Board> simulated_boards;
-            std::size_t num_compare = std::min(num_max_compare, _indices.size());
-            if (num_compare <= 1) {
-                std::cerr << "No candidates for comparation!" << std::endl;
-                return 0;
-            }
-            for (std::size_t rank = 0; rank < num_compare; rank++) {
-                auto [i,j] = _indices[rank];
-                const auto& horz_offsets = _horz_solutions[i].offsets;
-                const auto& vert_offsets = _vert_solutions[j].offsets;
-                assert(client.validate_solution(horz_offsets, vert_offsets));
-                Board b = Board::from_offsets(horz_offsets, vert_offsets);
-                simulated_boards.push_back(std::move(b));
-            }
-            int remaining = _indices.size() - num_compare;
-            // minimum number of candidates which can be discarded after pinpoint observation
-            int max_score = -1;
-            Point dig_point;
-            int n = problem.get_board_size();
-            for (int i = 0; i < n; i++) {
-                for (int j = 0; j < n; j++) {
-                    std::vector<int> hist(n+1);
-                    for (int rank = 0; rank < num_compare; rank++) {
-                        oil_reserve_t v = simulated_boards[rank][i][j];
-                        hist[v]++;
-                    }
-                    int score = num_compare - *std::max_element(hist.begin(), hist.end());
-                    if (score > max_score) {
-                        max_score = score;
-                        dig_point = Point{i,j};
-                    }
-                }
-            }
-            std::cerr << "dig: " << dig_point.i << ", " << dig_point.j << std::endl;
-            oil_reserve_t v = client.dig(dig_point);
-            // invalidate boards
-            _filter_indices();
-            return remaining;
-        }
-        private:
-        void _make_indices() {
-            _indices.clear();
-            const int m = problem.get_num_oilfield();
-            const std::size_t num_cand_1d = 2*m*m;
-            const int num_horz_cand = std::min(num_cand_1d, _horz_solutions.size());
-            const int num_vert_cand = std::min(num_cand_1d, _vert_solutions.size());
-            for (int i = 0; i < num_horz_cand; i++) {
-                for (int j = 0; j < num_vert_cand; j++) {
-                    _indices.emplace_back(i,j);
-                }
-            }
-        }
-        void _sort_indices() {
-            auto compare = [this](index_t idx1, index_t idx2) {
-                auto [i1,j1] = idx1;
-                auto [i2,j2] = idx2;
-                auto p1 = _horz_solutions[i1].penalty + _vert_solutions[j1].penalty;
-                auto p2 = _horz_solutions[i2].penalty + _vert_solutions[j2].penalty;
-                return p1 < p2;
-            };
-            std::sort(_indices.begin(), _indices.end(), compare);
-        }
-        void _filter_indices() {
-            std::vector<index_t> valid_indices;
-            for (auto [i,j] : _indices) {
-                const auto& horz_offsets = _horz_solutions[i].offsets;
-                const auto& vert_offsets = _vert_solutions[j].offsets;
-                bool valid = client.validate_solution(horz_offsets, vert_offsets);
-                if (valid) {
-                    valid_indices.emplace_back(i, j);
-                }
-            }
-            _indices = valid_indices;
-            std::cerr << "Number of remaining indices: " << _indices.size() << std::endl;
-        }
-        static std::vector<int> pick_large_variance(const search_results_type& solutions) {
-            int num_cand = std::max(solutions.size(), solutions.size()/10);  // top 10%
-            int board_size = problem.get_board_size();
-            std::vector<int> sum(board_size);
-            std::vector<int> ssum(board_size);  // square sum
-            for (int i = 0; i < num_cand; i++) {
-                const auto& rest = solutions[i].rest;
-                for (int j = 0; j < board_size; j++) {
-                    sum[j] += rest[j];
-                    ssum[j] += rest[j]*rest[j];
-                }
-            }
-            std::vector<int> non_normalized_var(board_size);
-            for (int j = 0; j < board_size; j++) {
-                non_normalized_var[j] = num_cand*ssum[j] - sum[j]*sum[j];
-            }
-            // index sort
-            std::vector<int> indices(non_normalized_var.size());
-            std::iota(indices.begin(), indices.end(), 0);
-            std::sort(indices.begin(), indices.end(),
-                      [&non_normalized_var](size_t i, size_t j){ return non_normalized_var[i] > non_normalized_var[j]; });
-            int num_remeasurement = board_size*4/5;
-            std::vector<int> res(num_remeasurement);
-            std::copy(indices.begin(), std::next(indices.begin(), num_remeasurement), res.begin());
-            return res;
-        }
-        std::vector<index_t> _indices;
-        search_results_type _horz_solutions;
-        search_results_type _vert_solutions;
-    };
     SolutionPicker make_candidates() {
         auto solve_1d = [](Direction dir, auto& observer, auto& projections) {
             std::string dir_str = (dir == Direction::Horizontal) ? "horz" : "vert";
