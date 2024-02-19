@@ -5,6 +5,7 @@
 #include <ranges>
 #include <iostream>
 #include <numeric>
+#include <random>
 #include <algorithm>
 #include <vector>
 #include <string>
@@ -25,6 +26,17 @@ void print_vector(const std::vector<T>& v, std::ostream& ostream=std::cerr) {
             ostream << delim;
         }
     }
+}
+
+template <typename T>
+auto index_sort(const std::vector<T>& v) {
+    std::vector<std::size_t> indices(v.size());
+    std::iota(indices.begin(), indices.end(), 0);
+    auto comp = [&v](std::size_t i, std::size_t j) {
+        return v[i] < v[j];
+    };
+    std::sort(indices.begin(), indices.end(), comp);
+    return indices;
 }
 
 }
@@ -409,7 +421,7 @@ struct PredictModel {
         double raw = raw_expectation(area, observation);
         int pred = std::round(raw);
         int n = problem.get_board_size();
-        pred = std::max(0, std::min(n, pred));
+        pred = std::max(0, pred);
         return pred;
     }
 };
@@ -763,13 +775,13 @@ struct SolutionPicker {
         return std::make_pair(true, std::move(sol));
     }
     // returns number of remaining candidates
-    int dig_pinpoint() {
+    bool dig_pinpoint() {
         constexpr std::size_t num_max_compare = 1000;
         std::vector<Board> simulated_boards;
         std::size_t num_compare = std::min(num_max_compare, _indices.size());
         if (num_compare <= 1) {
             std::cerr << "No candidates for comparation!" << std::endl;
-            return 0;
+            return false;
         }
         for (std::size_t rank = 0; rank < num_compare; rank++) {
             auto [i,j] = _indices[rank];
@@ -779,7 +791,6 @@ struct SolutionPicker {
             Board b = Board::from_offsets(horz_offsets, vert_offsets);
             simulated_boards.push_back(std::move(b));
         }
-        int remaining = _indices.size() - num_compare;
         // minimum number of candidates which can be discarded after pinpoint observation
         int max_score = -1;
         Point dig_point;
@@ -798,17 +809,31 @@ struct SolutionPicker {
                 }
             }
         }
+        if (max_score <= 0) {
+            return false;
+        }
         std::cerr << "dig: " << dig_point.i << ", " << dig_point.j << std::endl;
         oil_reserve_t v = client.dig(dig_point);
         // invalidate boards
         _filter_indices();
-        return remaining;
+        return true;
+    }
+    void iter_dig_pinpoint() {
+        const int threshold = 1;
+        while (_indices.size() > threshold) {
+            std::cerr << "size: " << _indices.size() << std::endl;
+            bool success = dig_pinpoint();
+            if (!success) {
+                return;
+            }
+        }
     }
     private:
     void _make_indices() {
         _indices.clear();
+        const int n = problem.get_board_size();
         const int m = problem.get_num_oilfield();
-        const std::size_t num_cand_1d = 2*m*m;
+        const std::size_t num_cand_1d = n*m*m/2;
         const int num_horz_cand = std::min(num_cand_1d, _horz_solutions.size());
         const int num_vert_cand = std::min(num_cand_1d, _vert_solutions.size());
         for (int i = 0; i < num_horz_cand; i++) {
@@ -882,8 +907,8 @@ struct ProjectionCombinationSolver {
             _vert_projections.push_back(poly.make_projection(Direction::Vertical));
         }
     }
-    SolutionPicker make_candidates() {
-        auto solve_1d = [](Direction dir, auto& observer, auto& projections) {
+    SolutionPicker make_candidates(bool shuffle, std::size_t seed) {
+        auto solve_1d = [shuffle, seed](Direction dir, auto& observer, auto& projections) {
             std::string dir_str = (dir == Direction::Horizontal) ? "horz" : "vert";
             auto pred = observer.get_predict_values();
             std::cerr << dir_str << " pred: ";
@@ -898,10 +923,35 @@ struct ProjectionCombinationSolver {
                 determined.push_back(v);
             }
             std::cerr << "determined: "; util::print_vector(determined); std::cerr << std::endl;
-            ProjectionSolver solver(pred, projections, determined);
+
             std::cerr << "search " << dir_str << " candidates" << std::endl;
-            auto solutions = solver.solve();
-            return solutions;
+            if (shuffle) {
+                std::mt19937 mt(seed);
+                std::vector<int> shuffle_idx(projections.size());
+                std::iota(shuffle_idx.begin(), shuffle_idx.end(), 0);
+                std::shuffle(shuffle_idx.begin(), shuffle_idx.end(), mt);
+                std::vector<projection_type> shuffled_projections;
+                for (std::size_t k = 0; k < projections.size(); k++) {
+                    shuffled_projections.push_back(projections[shuffle_idx[k]]);
+                }
+                ProjectionSolver solver(pred, shuffled_projections, determined);
+                auto solutions = solver.solve();
+                // restore offset order
+                auto shuffle_idx_rev = util::index_sort(shuffle_idx);
+                for (auto& sol : solutions) {
+                    std::vector<int> offsets;
+                    for (std::size_t k = 0; k < sol.offsets.size(); k++) {
+                        offsets.push_back(sol.offsets[shuffle_idx_rev[k]]);
+                    }
+                    sol.offsets = offsets;
+                }
+                return solutions;
+            }
+            else {
+                ProjectionSolver solver(pred, projections, determined);
+                auto solutions = solver.solve();
+                return solutions;
+            }
         };
         auto horz_solutions = solve_1d(Direction::Horizontal, _horz_observer, _horz_projections);
         auto vert_solutions = solve_1d(Direction::Vertical, _vert_observer, _vert_projections);
@@ -934,7 +984,9 @@ struct ProjectionCombinationSolver {
             observe_all();
 
             // generate valid solution candidates
-            auto solution_picker = make_candidates();
+            bool shuffle = (iteration == 0) ? false : true;
+            std::size_t seed = iteration;
+            auto solution_picker = make_candidates(shuffle, seed);
 
             // try submitting before digging (only for first iteration)
             if (iteration == 0) {
@@ -949,13 +1001,7 @@ struct ProjectionCombinationSolver {
             }
 
             // generate solution candidates and filter them by pinpoint observation
-            while(true) {
-                int remaining = solution_picker.dig_pinpoint();
-                std::cerr << "remaining: " << remaining << std::endl;
-                if (remaining == 0) {
-                    break;
-                }
-            }
+            solution_picker.iter_dig_pinpoint();
             constexpr int num_challenge = 1;
             for (int i = 0; i < num_challenge; i++) {
                 std::cerr << "try: " << i+1 << std::endl;
