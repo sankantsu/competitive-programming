@@ -1075,7 +1075,7 @@ int main() {
     using ahc::problem;
     ahc::init_problem();
     int m = problem.get_num_oilfield();
-    if (m < 10) {
+    if (m < 9) {
         ahc::ProjectionCombinationSolver solver;
         solver.solve();
     }
