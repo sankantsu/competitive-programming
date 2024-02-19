@@ -27,5 +27,5 @@ for i in `seq 0 99`; do
   infile="${indir}/${digit}.txt"
   outfile="${outdir}/${digit}.txt"
   logfile="${logdir}/${digit}.txt"
-  $tester $bin <$infile >$outfile 2>$logfile
+  /usr/bin/time $tester $bin <$infile >$outfile 2>$logfile
 done
