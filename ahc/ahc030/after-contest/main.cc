@@ -345,8 +345,7 @@ struct PredictModel {
     void init() {
         _error_param = problem.get_error_param();
         auto n = problem.get_board_size();
-        _likelihood_cache.resize(n*n*n*n*n*n);
-        std::fill(_likelihood_cache.begin(), _likelihood_cache.end(), -1.0);
+        _init_table();
     }
     double mean(int area, int hypo) {
         return (area - hypo)*_error_param + hypo*(1 - _error_param);
@@ -359,25 +358,20 @@ struct PredictModel {
         double slope = 1 - _error_param;
         return (observation - base) / slope;
     }
-    // Given area size and hypothetical reservation amount,
-    // calculates the likelihood that observation yields a value x
-    double likelihood(int area, int hypo, int x) {
-        double& cached_value = _likelihood_cache_at(area, hypo, x);
-        if (cached_value != _cache_empty) {
-            return cached_value;
-        }
-        double mu = mean(area, hypo);
-        double sigma = std::sqrt(variance(area));
-        auto cdf = [mu, sigma](double x) {
-            return cdf_normal(mu, sigma, x);
-        };
-        if (x == 0) {
-            cached_value = cdf(0.5);
-        }
-        else {
-            cached_value = cdf(x + 0.5) - cdf(x - 0.5);
-        }
-        return cached_value;
+    auto pred_range(int area, int v) {
+        int min_pred = _min_pred[area][v];
+        int max_pred = min_pred + _likelihoods[area][v].size() - 1;
+        return std::make_pair(min_pred, max_pred);
+    }
+    double likelihood(int area, int v, int x) {
+        auto [min, max] = pred_range(area, v);
+        assert(min <= x && x <= max);
+        return _likelihoods[area][v][x - min].first;
+    }
+    double log_likelihood(int area, int v, int x) {
+        auto [min, max] = pred_range(area, v);
+        assert(min <= x && x <= max);
+        return _likelihoods[area][v][x - min].second;
     }
     // https://cpprefjp.github.io/reference/cmath/erf.html
     static double cdf_normal(double mu, double sigma, double x) {
@@ -387,12 +381,65 @@ struct PredictModel {
     }
     private:
     static constexpr double _cache_empty = -1.;
-    double& _likelihood_cache_at(int area, int hypo, int x) {
-        auto n = problem.get_board_size();
-        return _likelihood_cache[n*n*n*n*area + n*n*hypo + x];
+    void _init_table() {
+        int n = problem.get_board_size();
+        int total_rsv = problem.get_total_reservation();
+
+        // init shape of _min_pred
+        _min_pred.resize(n*n+1);
+        for (auto& v : _min_pred) {
+            v.resize(total_rsv+1);
+        }
+
+        // init _likelihoods
+        for (int area = 0; area <= n*n; area++) {
+            std::vector<std::vector<prob_pair>> vs;
+            for (int v = 0; v <= total_rsv; v++) {
+                std::vector<prob_pair> vec;
+                int mu = std::round(mean(area, v));
+                constexpr double eps = 1e-6;
+                // init likelihoodds lower than mean
+                for (int pred = mu; pred >= 0; pred--) {
+                    double lh = _calc_likelihood(area, v, pred);
+                    if (lh < eps) {
+                        _min_pred[area][v] = pred + 1;
+                        break;
+                    }
+                    vec.push_back(std::make_pair(lh, std::log(lh)));
+                }
+                std::reverse(vec.begin(), vec.end());
+                // init likelihoodds higher than mean
+                for (int pred = mu+1; ; pred++) {
+                    double lh = _calc_likelihood(area, v, pred);
+                    if (lh < eps) {
+                        break;
+                    }
+                    vec.push_back(std::make_pair(lh, std::log(lh)));
+                }
+                vs.push_back(std::move(vec));
+            }
+            _likelihoods.push_back(std::move(vs));
+        }
+    }
+    // Given area size and hypothetical reservation amount,
+    // calculates the likelihood that observation yields a value x
+    double _calc_likelihood(int area, int hypo, int x) {
+        double mu = mean(area, hypo);
+        double sigma = std::sqrt(variance(area));
+        auto cdf = [mu, sigma](double x) {
+            return cdf_normal(mu, sigma, x);
+        };
+        if (x == 0) {
+            return cdf(0.5);
+        }
+        else {
+            return cdf(x + 0.5) - cdf(x - 0.5);
+        }
     }
     double _error_param;
-    std::vector<double> _likelihood_cache;
+    using prob_pair = std::pair<double, double>;  // raw prob and log prob
+    std::vector<std::vector<std::vector<prob_pair>>> _likelihoods;  // area, actual value, pred value -> prob
+    std::vector<std::vector<int>> _min_pred;
 };
 static PredictModel predict_model;
 
@@ -419,30 +466,38 @@ struct Observation {
         for (auto [i,j] : point_set) {
             hypo_reservation += board[i][j];
         }
+        auto [min, max] = predict_model.pred_range(point_set.size(), hypo_reservation);
+        if (x < min || max < x) {
+            return 0.;
+        }
         return predict_model.likelihood(point_set.size(), hypo_reservation, x);
     }
     static double mutual_information(const std::vector<Point>& point_set, const Pool& pool, const std::vector<value_t>& count) {
-        /* value_t max_y = problem.get_total_reservation(); */
-        value_t max_y = problem.get_total_reservation();
-        std::vector<std::vector<double>> likelihoods(pool.size(), std::vector<double>(max_y + 1));
+        const int area = point_set.size();
         // calculates marginal distribution of observation value y
-        std::vector<double> prob_y(max_y+1);
+        std::vector<double> prob_y(problem.get_total_reservation()*2);
         for (std::size_t k = 0; k < pool.size(); k++) {
             const auto& hypo = pool[k];
-            for (value_t y = 0; y <= max_y; y++) {
+            auto [min_y, max_y] = predict_model.pred_range(area, count[k]);
+            for (value_t y = min_y; y <= max_y; y++) {
                 double lh = predict_model.likelihood(point_set.size(), count[k], y);
-                likelihoods[k][y] = lh;
                 prob_y[y] += hypo.prob * lh;
             }
+        }
+        std::vector<double> prob_y_ln;
+        for (auto prob : prob_y) {
+            prob_y_ln.push_back(std::log(prob));
         }
         // calculates mutual information
         double mi = 0;
         for (std::size_t k = 0; k < pool.size(); k++) {
             const auto& hypo = pool[k];
-            for (value_t y = 0; y <= max_y; y++) {
-                double lh = likelihoods[k][y];
-                double delta = hypo.prob * lh * std::log(lh / prob_y[y]);
-                if (!std::isnan(delta)) {
+            auto [min_y, max_y] = predict_model.pred_range(area, count[k]);
+            for (value_t y = min_y; y <= max_y; y++) {
+                double lh = predict_model.likelihood(point_set.size(), count[k], y);
+                double lh_ln = predict_model.log_likelihood(point_set.size(), count[k], y);
+                double delta = hypo.prob * lh * (lh_ln - prob_y_ln[y]);
+                if (!std::isinf(delta) && !std::isnan(delta)) {
                     mi += delta;
                 }
             }
@@ -557,6 +612,7 @@ auto make_observation_set(const Pool& pool) {
 }
 
 void update_probabilities(Pool& pool, const std::vector<Point>& set, value_t v) {
+    std::cerr << "update_probabilities()" << std::endl;
     double sum = 0;
     for (auto& hypo : pool) {
         double likelihood = Observation::likelihood(set, hypo, v);
