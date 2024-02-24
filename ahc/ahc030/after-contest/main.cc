@@ -662,6 +662,24 @@ Pool annealing(Hypothesis h) {
     constexpr std::size_t n_iteration = 20000;
     double start_temp = 10;
     double end_temp = 0;
+    auto try_move = [&s, &states, &saved](int k, Point to, double temp) {
+        double ln_prob = s.ln_prob;
+        Point org = s.offsets[k];
+        s.move(k, to);  // move to destination
+        if (std::isinf(s.ln_prob)) {  // restore
+            s.move(k, org);
+            return;
+        }
+        if (!saved.contains(s.hash())) {  // try inserting new state
+            states.push_back(s);
+            saved.insert(s.hash());
+        }
+        double accept_prob = std::exp((s.ln_prob - ln_prob) / temp);
+        double r = gen_random_double();
+        if (r > accept_prob) {  // restore
+            s.move(k, org);
+        }
+    };
     for (std::size_t iteration = 0; iteration < n_iteration; iteration++) {
         double temp = start_temp + (end_temp - start_temp) * iteration / n_iteration;
         double r = gen_random_double();
@@ -678,47 +696,14 @@ Pool annealing(Hypothesis h) {
             if (ni < 0 || (n - size_i) < ni || nj < 0 || (n - size_j) < nj) {
                 continue;
             }
-            double ln_prob = s.ln_prob;
-            s.move(k, Point{ni,nj});
-            if (std::isinf(s.ln_prob)) {
-                s.move(k, Point{i,j});
-                continue;
-            }
-            if (!saved.contains(s.hash())) {
-                states.push_back(s);
-                saved.insert(s.hash());
-            }
-            std::cerr << "ln_prob, new ln_prob: " << ln_prob << ", " << s.ln_prob << std::endl;
-            double accept_prob = std::exp((s.ln_prob - ln_prob) / temp);
-            std::cerr << "accept_prob: " << accept_prob << std::endl;
-            double r = gen_random_double();
-            std::cerr << "r: " << r << std::endl;
-            if (r > accept_prob) {  // restore
-                std::cerr << "restore" << std::endl;
-                s.move(k, Point{i,j});
-            }
+            try_move(k, Point{ni,nj}, temp);
         }
         else {
             int k = gen_random() % m;
-            auto [i,j] = s.offsets[k];
             auto [size_i,size_j] = problem.get_polyominos()[k].bbox_size();
             int ni = gen_random() % (n - size_i);
             int nj = gen_random() % (n - size_j);
-            double ln_prob = s.ln_prob;
-            s.move(k, Point{ni,nj});
-            if (std::isinf(s.ln_prob)) {
-                s.move(k, Point{i,j});
-                continue;
-            }
-            if (!saved.contains(s.hash())) {
-                states.push_back(s);
-                saved.insert(s.hash());
-            }
-            double accept_prob = std::exp((s.ln_prob - ln_prob) / temp);
-            double r = gen_random_double();
-            if (r > accept_prob) {  // restore
-                s.move(k, Point{i,j});
-            }
+            try_move(k, Point{ni,nj}, temp);
         }
     }
     std::sort(states.begin(), states.end(),
@@ -847,7 +832,6 @@ struct Solver {
         constexpr double threshold = 0.95;
         auto pool = generate_random_arrangement();
         constexpr std::size_t max_iter = 1000;
-        bool all_candidates_failed = false;
         for (std::size_t iter = 0; iter < max_iter; iter++) {
             if (iter != 0) {
                 pool = annealing(pool[0]);
@@ -855,10 +839,6 @@ struct Solver {
             auto set = make_observation_set(pool);
             value_t v = client.predict(set);
             bool check = update_probabilities(pool, set, v);
-            if (!check) {
-                all_candidates_failed = true;
-                continue;
-            }
             double prob = pool[0].prob;
             std::cerr << "best prob: " << prob << std::endl;
             for (auto [i,j] : pool[0].offsets) {
@@ -885,7 +865,7 @@ struct Solver {
     }
     void solve() {
         int m = problem.get_num_oilfield();
-        if (false) {
+        if (m == 2) {
             solve_m_2();
         }
         else {
