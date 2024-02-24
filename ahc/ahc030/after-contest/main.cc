@@ -63,6 +63,9 @@ struct Point {
     int i;
     int j;
 };
+Point add_point(Point x, Point y) {
+    return Point{x.i + y.i, x.j + y.j};
+}
 
 struct Polyomino {
     using projection_type = std::vector<value_t>;
@@ -113,11 +116,6 @@ struct Problem {
         _num_oilfield = num_oilfield;
         _error_param = error_param;
         _oil_fields = oil_fields;
-        // sort oil fields by are size
-        std::sort(_oil_fields.begin(), _oil_fields.end(),
-                  [](const Polyomino& lhs, const Polyomino& rhs) {
-                        return lhs.get_area() > rhs.get_area();
-                  });
         for (const auto& poly : _oil_fields) {
             _total_reservation += poly.get_area();
         }
@@ -603,6 +601,19 @@ struct State {
         offsets[k] = to;
         ln_prob = log_likelihood(board);
     }
+    bool swap(int k, int l) {
+        auto p = offsets[k];
+        auto q = offsets[l];
+        auto p2 = add_point(q, _swap_table[l][k]);
+        auto q2 = add_point(p, _swap_table[k][l]);
+        bool check = boundary_check(k, p2) && boundary_check(l, q2);
+        if (!check) {
+            return false;
+        }
+        move(k, p2);
+        move(l, q2);
+        return true;
+    }
     std::size_t hash() {
         int n = problem.get_board_size();
         std::size_t v = 0;
@@ -611,6 +622,15 @@ struct State {
             v ^= _hashes[k][n*i + j];
         }
         return v;
+    }
+    static bool boundary_check(int k, Point p) {
+        int n = problem.get_board_size();
+        auto [size_i, size_j] = problem.get_polyominos()[k].bbox_size();
+        auto [ni,nj] = p;
+        if (ni < 0 || (n - size_i) < ni || nj < 0 || (n - size_j) < nj) {
+            return false;
+        }
+        return true;
     }
     static State from_hypothesis(const auto& h) {
         State s;
@@ -648,10 +668,47 @@ struct State {
             _hashes.push_back(std::move(vec));
         }
     }
+    static void init_swap() {
+        int m = problem.get_num_oilfield();
+        auto count_common = [](size_t k, size_t l, int i, int j) {
+            const auto& poly_k = problem.get_polyominos()[k];
+            const auto& poly_l = problem.get_polyominos()[l];
+            int cnt = 0;
+            for (auto p : poly_k.get_relative_positions()) {
+                for (auto q : poly_l.get_relative_positions()) {
+                    int ni = q.i + i;
+                    int nj = q.j + j;
+                    if (p.i == ni && p.j == nj) {
+                        cnt++;
+                    }
+                }
+            }
+            return cnt;
+        };
+        _swap_table = decltype(_swap_table)(m, std::vector<Point>(m));
+        for (std::size_t k = 0; k < m; k++) {
+            for (std::size_t l = 0; l < m; l++) {
+                auto size_k = problem.get_polyominos()[k].bbox_size();
+                auto size_l = problem.get_polyominos()[l].bbox_size();
+                using entry = std::pair<Point, int>;
+                std::vector<entry> counts;
+                for (int i = -size_l.first; i < size_k.first; i++) {
+                    for (int j = -size_l.second; j < size_k.second; j++) {
+                        counts.emplace_back(Point{i,j}, count_common(k,l,i,j));
+                    }
+                }
+                std::sort(counts.begin(), counts.end(),
+                          [](const entry& lhs, const entry& rhs) { return lhs.second > rhs.second; });
+                _swap_table[k][l] = counts[0].first;
+                auto [i,j] = _swap_table[k][l];
+                /* std::cerr << "swap_table[" << k << "][" << l << "] = (" << i << "," << j << ")" << std::endl; */
+            }
+        }
+    }
     private:
-    static std::vector<std::vector<std::size_t>> _hashes;
+    static inline std::vector<std::vector<std::size_t>> _hashes;
+    static inline std::vector<std::vector<Point>> _swap_table;
 };
-std::vector<std::vector<std::size_t>> State::_hashes;
 
 Pool annealing(Hypothesis h) {
     const int n = problem.get_board_size();
@@ -680,11 +737,41 @@ Pool annealing(Hypothesis h) {
             s.move(k, org);
         }
     };
+    auto try_swap = [&s, &states, &saved](int k, int l, double temp) {
+        auto ans = s.board.make_answer();
+        Point org_k = s.offsets[k];
+        Point org_l = s.offsets[l];
+        auto restore = [&s, k, l, org_k, org_l]{
+            s.move(k, org_k);
+            s.move(l, org_l);
+        };
+        double ln_prob = s.ln_prob;
+        bool success = s.swap(k, l);  // move to destination
+        if (!success) {
+            return;
+        }
+        if (std::isinf(s.ln_prob)) {  // restore
+            restore();
+            return;
+        }
+        if (!saved.contains(s.hash())) {  // try inserting new state
+            states.push_back(s);
+            saved.insert(s.hash());
+        }
+        double accept_prob = std::exp((s.ln_prob - ln_prob) / temp);
+        double r = gen_random_double();
+        if (r > accept_prob) {  // restore
+            restore();
+        }
+    };
+    constexpr double prob_move_once = 0.6;
+    constexpr double prob_move_random = 0.2;
+    constexpr double prob_swap = 1 - prob_move_once - prob_move_random;
     for (std::size_t iteration = 0; iteration < n_iteration; iteration++) {
         double temp = start_temp + (end_temp - start_temp) * iteration / n_iteration;
         double r = gen_random_double();
         // move one square
-        if (r < 0.6) {
+        if (r < prob_move_once) {
             constexpr int delta[4][2] = {{1,0}, {0,-1}, {-1,0}, {0,1}};
             int k = gen_random() % m;
             int dir = gen_random() % 4;
@@ -698,12 +785,20 @@ Pool annealing(Hypothesis h) {
             }
             try_move(k, Point{ni,nj}, temp);
         }
-        else {
+        // move random
+        else if (r < prob_move_once + prob_move_random) {
             int k = gen_random() % m;
             auto [size_i,size_j] = problem.get_polyominos()[k].bbox_size();
             int ni = gen_random() % (n - size_i);
             int nj = gen_random() % (n - size_j);
             try_move(k, Point{ni,nj}, temp);
+        }
+        // swap two
+        else {
+            int k = gen_random() % m;
+            int l = gen_random() % m;
+            if (k == l) continue;
+            try_swap(k, l, temp);
         }
     }
     std::sort(states.begin(), states.end(),
@@ -865,7 +960,7 @@ struct Solver {
     }
     void solve() {
         int m = problem.get_num_oilfield();
-        if (m == 2) {
+        if (false) {
             solve_m_2();
         }
         else {
@@ -899,6 +994,7 @@ void init_problem() {
     client.init();
     predict_model.init();
     State::init_hash();
+    State::init_swap();
 }
 
 }  // namespace ahc
