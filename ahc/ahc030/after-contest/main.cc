@@ -1,14 +1,15 @@
 #include <cstdio>
 #include <cmath>
 #include <cassert>
-#include <cwchar>
 #include <type_traits>
 #include <ranges>
 #include <iostream>
 #include <numeric>
 #include <algorithm>
 #include <vector>
+#include <unordered_set>
 #include <string>
+#include <random>
 
 namespace util {
 
@@ -43,6 +44,16 @@ auto index_sort(const std::vector<T>& v) {
 namespace ahc {
 
 using value_t = int;
+
+static std::mt19937 _mt(0);
+uint32_t gen_random() {
+    return _mt();
+}
+
+double gen_random_double() {
+    static std::uniform_real_distribution dist(0.,1.);
+    return dist(_mt);
+}
 
 namespace oil_reservation {
     constexpr value_t undef = -1;
@@ -212,6 +223,8 @@ struct Client {
 
         value_t v;
         std::cin >> v;
+
+        _history.push_back(HistoryEntry{std::forward<Range>(set), v});
         return v;
     }
     template <std::ranges::range Range>
@@ -291,6 +304,7 @@ struct Client {
         }
         return sum;
     }
+    const auto& get_history() { return _history; }
     private:
     void _add_request_count() {
         assert(_request_count < _max_request_count);
@@ -336,7 +350,12 @@ struct Client {
     int _request_count = 0;
     int _max_request_count;
     using known_point = std::pair<Point, value_t>;
+    struct HistoryEntry {
+        std::vector<Point> set;
+        value_t v;
+    };
     std::vector<known_point> _known_points;
+    std::vector<HistoryEntry> _history;
     Board _cache;
 };
 static Client client;
@@ -551,6 +570,177 @@ Pool enumerate_all_arrangement() {
     return Pool {hypotheses};
 }
 
+Pool generate_random_arrangement() {
+    constexpr std::size_t n_sample = 1000;
+    const int n = problem.get_board_size();
+    const double prob = 1. / n_sample;
+    Pool pool;
+    for (int l = 0; l < n_sample; l++) {
+        std::vector<Point> offsets;
+        for (int k = 0; k < problem.get_polyominos().size(); k++) {
+            auto [size_i, size_j] = problem.get_polyominos()[k].bbox_size();
+            int i = gen_random() % (n - size_i);
+            int j = gen_random() % (n - size_j);
+            offsets.push_back(Point{i,j});
+        }
+        Hypothesis h {prob, std::move(offsets)};
+        pool.push_back(std::move(h));
+    }
+    return pool;
+}
+
+struct State {
+    double ln_prob;
+    std::vector<Point> offsets;
+    Board board;
+    void move(int k, Point to) {
+        auto [i,j] = offsets[k];
+        auto [ni,nj] = to;
+        for (auto [rel_i,rel_j] : problem.get_polyominos()[k].get_relative_positions()) {
+            board[i + rel_i][j + rel_j]--;
+            board[ni + rel_i][nj + rel_j]++;
+        }
+        offsets[k] = to;
+        ln_prob = log_likelihood(board);
+    }
+    std::size_t hash() {
+        int n = problem.get_board_size();
+        std::size_t v = 0;
+        for (std::size_t k = 0; k < offsets.size(); k++) {
+            auto [i,j] = offsets[k];
+            v ^= _hashes[k][n*i + j];
+        }
+        return v;
+    }
+    static State from_hypothesis(const auto& h) {
+        State s;
+        s.offsets = h.offsets;
+        s.board = h.to_board();
+        s.ln_prob = log_likelihood(s.board);
+        return s;
+    }
+    static double log_likelihood(const Board& b) {
+        double ln_prob = 0;
+        for (const auto& [set,y] : client.get_history()) {
+            value_t v = 0;
+            for (auto [i,j] : set) {
+                v += b[i][j];
+            }
+            auto [min_y,max_y] = predict_model.pred_range(set.size(), v); 
+            if (y < min_y || max_y < y) {
+                return -std::numeric_limits<double>::infinity();
+            }
+            double ln_lh = predict_model.log_likelihood(set.size(), v, y);
+            ln_prob += ln_lh;
+        }
+        return ln_prob;
+    }
+    static void init_hash() {
+        int n = problem.get_board_size();
+        int m = problem.get_num_oilfield();
+        for (std::size_t k = 0; k < m; k++) {
+            std::vector<std::size_t> vec;
+            for (std::size_t ij = 0; ij < n*n; ij++) {
+                std::size_t u1 = gen_random();
+                std::size_t u2 = gen_random();
+                vec.push_back((u1 << 32) | u2);
+            }
+            _hashes.push_back(std::move(vec));
+        }
+    }
+    private:
+    static std::vector<std::vector<std::size_t>> _hashes;
+};
+std::vector<std::vector<std::size_t>> State::_hashes;
+
+Pool annealing(Hypothesis h) {
+    const int n = problem.get_board_size();
+    const int m = problem.get_num_oilfield();
+    State s = State::from_hypothesis(h);
+    std::vector<State> states;
+    std::unordered_set<std::size_t> saved;
+    constexpr std::size_t n_iteration = 20000;
+    double start_temp = 10;
+    double end_temp = 0;
+    for (std::size_t iteration = 0; iteration < n_iteration; iteration++) {
+        double temp = start_temp + (end_temp - start_temp) * iteration / n_iteration;
+        double r = gen_random_double();
+        // move one square
+        if (r < 0.6) {
+            constexpr int delta[4][2] = {{1,0}, {0,-1}, {-1,0}, {0,1}};
+            int k = gen_random() % m;
+            int dir = gen_random() % 4;
+            auto [i,j] = s.offsets[k];
+            auto [di,dj] = delta[dir];
+            auto [size_i,size_j] = problem.get_polyominos()[k].bbox_size();
+            int ni = i + di;
+            int nj = j + dj;
+            if (ni < 0 || (n - size_i) < ni || nj < 0 || (n - size_j) < nj) {
+                continue;
+            }
+            double ln_prob = s.ln_prob;
+            s.move(k, Point{ni,nj});
+            if (std::isinf(s.ln_prob)) {
+                s.move(k, Point{i,j});
+                continue;
+            }
+            if (!saved.contains(s.hash())) {
+                states.push_back(s);
+                saved.insert(s.hash());
+            }
+            std::cerr << "ln_prob, new ln_prob: " << ln_prob << ", " << s.ln_prob << std::endl;
+            double accept_prob = std::exp((s.ln_prob - ln_prob) / temp);
+            std::cerr << "accept_prob: " << accept_prob << std::endl;
+            double r = gen_random_double();
+            std::cerr << "r: " << r << std::endl;
+            if (r > accept_prob) {  // restore
+                std::cerr << "restore" << std::endl;
+                s.move(k, Point{i,j});
+            }
+        }
+        else {
+            int k = gen_random() % m;
+            auto [i,j] = s.offsets[k];
+            auto [size_i,size_j] = problem.get_polyominos()[k].bbox_size();
+            int ni = gen_random() % (n - size_i);
+            int nj = gen_random() % (n - size_j);
+            double ln_prob = s.ln_prob;
+            s.move(k, Point{ni,nj});
+            if (std::isinf(s.ln_prob)) {
+                s.move(k, Point{i,j});
+                continue;
+            }
+            if (!saved.contains(s.hash())) {
+                states.push_back(s);
+                saved.insert(s.hash());
+            }
+            double accept_prob = std::exp((s.ln_prob - ln_prob) / temp);
+            double r = gen_random_double();
+            if (r > accept_prob) {  // restore
+                s.move(k, Point{i,j});
+            }
+        }
+    }
+    std::sort(states.begin(), states.end(),
+              [](const State& lhs, const State& rhs) {
+                return lhs.ln_prob > rhs.ln_prob;
+              });
+    const std::size_t n_sample = std::min(1000ul, states.size());
+    states.resize(n_sample);
+    double prob_sum = 0;
+    for (const auto& s : states) {
+        prob_sum += std::exp(s.ln_prob);
+    }
+    Pool pool;
+    for (auto& s : states) {
+        Hypothesis h;
+        h.prob = std::exp(s.ln_prob) / prob_sum;
+        h.offsets = std::move(s.offsets);
+        pool.push_back(std::move(h));
+    }
+    return pool;
+}
+
 auto make_observation_set(const Pool& pool) {
     std::cerr << "make_observation_set()" << std::endl;
     std::vector<Board> boards;
@@ -603,15 +793,11 @@ auto make_observation_set(const Pool& pool) {
             max_score = score;
         }
     }
-    for (auto [i,j] : observation_set) {
-        std::cerr << "(" << i << "," << j << ")" << " ";
-    }
-    std::cerr << std::endl;
     std::cerr << "score: " << max_score << std::endl;
     return observation_set;
 }
 
-void update_probabilities(Pool& pool, const std::vector<Point>& set, value_t v) {
+bool update_probabilities(Pool& pool, const std::vector<Point>& set, value_t v) {
     std::cerr << "update_probabilities()" << std::endl;
     double sum = 0;
     for (auto& hypo : pool) {
@@ -619,16 +805,21 @@ void update_probabilities(Pool& pool, const std::vector<Point>& set, value_t v) 
         hypo.prob *= likelihood;
         sum += hypo.prob;
     }
+    if (sum == 0.) {
+        return false;
+    }
+    std::cerr << "sum: " << sum << std::endl;
     // normalize
     for (auto& hypo : pool) {
         hypo.prob = hypo.prob / sum;
     }
     std::sort(pool.begin(), pool.end(),
               [](const auto& lhs, const auto& rhs) { return lhs.prob > rhs.prob; });
+    return true;
 }
 
 struct Solver {
-    void solve() {
+    void solve_m_2() {
         constexpr double threshold = 0.95;
         auto pool = enumerate_all_arrangement();
         while (true) {
@@ -649,6 +840,56 @@ struct Solver {
                     std::cerr << "failed" << std::endl;
                 }
             }
+        }
+    }
+    void solve_large() {
+        int fail_cnt = 0;
+        constexpr double threshold = 0.95;
+        auto pool = generate_random_arrangement();
+        constexpr std::size_t max_iter = 1000;
+        bool all_candidates_failed = false;
+        for (std::size_t iter = 0; iter < max_iter; iter++) {
+            if (iter != 0) {
+                pool = annealing(pool[0]);
+            }
+            auto set = make_observation_set(pool);
+            value_t v = client.predict(set);
+            bool check = update_probabilities(pool, set, v);
+            if (!check) {
+                all_candidates_failed = true;
+                continue;
+            }
+            double prob = pool[0].prob;
+            std::cerr << "best prob: " << prob << std::endl;
+            for (auto [i,j] : pool[0].offsets) {
+                std::cerr << i << "," << j << " ";
+            }
+            std::cerr << std::endl;
+            if (prob > threshold) {
+                std::cerr << "Submitting an answer... ";
+                Board b = pool[0].to_board();
+                bool success = client.answer(b.make_answer());
+                if (success) {
+                    std::cerr << "success!" << std::endl;
+                    return;
+                }
+                else {
+                    fail_cnt++;
+                    std::cerr << "failed" << std::endl;
+                    if (fail_cnt >= 5) {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+    void solve() {
+        int m = problem.get_num_oilfield();
+        if (false) {
+            solve_m_2();
+        }
+        else {
+            solve_large();
         }
     }
 };
@@ -677,6 +918,7 @@ void init_problem() {
     problem.init(board_size, num_oilfield, error_param, oil_fields);
     client.init();
     predict_model.init();
+    State::init_hash();
 }
 
 }  // namespace ahc
