@@ -160,6 +160,28 @@ Solution solve() {
             pool.erase(it);
             pool.emplace(rest, row);
         }
+        for (int row = 0; row < m; row++) {
+            if (assignments[row].empty()) {
+                // move one entry to empty row
+                int free = (hs[row+1] - hs[row]) * problem.w;
+                bool done = false;
+                for (int i = 0; i < m; i++) {
+                    if (done) break;
+                    if (i == row) continue;
+                    for (int j = assignments[i].size() - 1; j >= 1; j--) {
+                        int k = assignments[i][j];
+                        int s = problem.a[d][k];
+                        if (s <= free) {
+                            auto it = assignments[i].begin() + j;
+                            assignments[i].erase(it);
+                            assignments[row].push_back(k);
+                            done = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
         std::vector<Rectangle> arrangement(problem.n);
         for (int row = 0; row < m; row++) {
             const auto& ar = assignments[row];
