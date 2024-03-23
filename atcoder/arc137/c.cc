@@ -1,22 +1,34 @@
 #include <iostream>
 #include <vector>
+#include <string>
+#include <algorithm>
+#include <cassert>
+
+#define rep(i,n) for (long long i = 0; i < static_cast<long long>((n)); i++)
 
 using namespace std;
 
 int main() {
-    int n;
+    long n;
     cin >> n;
-    vector<int> a(n);
-    for (int i = 0; i < n; i++) cin >> a[i];
-    if (a[n-1] - a[n-2] > 1) {
+
+    vector<long> a(n);
+    rep(i,n) cin >> a[i];
+
+    long ans;
+    if (a[n-1] - a[n-2] >= 2) {
+        ans = true;
+    }
+    else if ((a[n-1]-n+2) % 2 == 0) {
+        ans = true;
+    }
+    else {
+        ans = false;
+    }
+    if (ans) {
         cout << "Alice" << endl;
     }
     else {
-        if ((a[n-1] - (n-1)) % 2 == 0) {
-            cout << "Bob" << endl;
-        }
-        else {
-            cout << "Alice" << endl;
-        }
+        cout << "Bob" << endl;
     }
 }

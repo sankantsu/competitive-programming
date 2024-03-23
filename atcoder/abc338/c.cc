@@ -2,12 +2,11 @@
 #include <vector>
 #include <string>
 #include <algorithm>
+#include <cassert>
 
-#define rep(i,n) for (long long i = 0; i < static_cast<long long>((n)); i++)
+#define rep(i,n) for (long i = 0; i < static_cast<long long>((n)); i++)
 
 using namespace std;
-
-constexpr long inf = 1L<<60;
 
 int main() {
     long n;
@@ -18,25 +17,26 @@ int main() {
     rep(i,n) cin >> a[i];
     rep(i,n) cin >> b[i];
 
-    auto max_y = [&](long x) {
-        long y = inf;
-        rep(i,n) {
-            if (b[i] == 0) continue;
-            y = min(y, (q[i] - a[i]*x) / b[i]);
-        }
-        return y;
-    };
-
-    long max_x = inf;
+    constexpr long inf = 1L<<60;
+    long k = inf;
     rep(i,n) {
         if (a[i] == 0) continue;
-        max_x = min(max_x, q[i]/a[i]);
+        k = min(k, q[i]/a[i]);
     }
 
-    long ans = -1;
-    rep(x,max_x+1) {
-        long y = max_y(x);
-        ans = max(ans, (long)(x + y));
+    long ans = 0;
+    rep(x,k+1) {
+        long y = inf;
+        rep(i,n) {
+            if (q[i] - a[i]*x < 0) {
+                y = inf;
+                break;
+            }
+            if (b[i] == 0) continue;
+            y = min(y, (q[i] - a[i]*x)/b[i]);
+        }
+        /* cerr << "x,y: " << x << " " << y << endl; */
+        ans = max(ans, x + y);
     }
     cout << ans << endl;
 }

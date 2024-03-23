@@ -1,37 +1,36 @@
 #include <iostream>
 #include <vector>
+#include <string>
 #include <algorithm>
+#include <cassert>
 
-#define rep(i,n) for (long long i = 0; i < static_cast<long long>((n)); i++)
+#define rep(i,n) for (long i = 0; i < static_cast<long>((n)); i++)
 
 using namespace std;
 
-const int max_n = 200000;
-
-int n,q;
-int x[max_n+1];
-
-int val[max_n+1];
-int rank_[max_n+1];
-
 int main() {
+    long n, q;
     cin >> n >> q;
-    rep(i,q) cin >> x[i];
 
-    rep(i,n) val[i] = i+1;
-    rep(i,n) rank_[i+1] = i;
-    rep(i,q) {
-        int r = rank_[x[i]];
-        int s = (r == n-1) ? r-1 : r+1;
-        int a = val[r];
-        int b = val[s];
-        val[r] = b;
-        val[s] = a;
-        rank_[a] = s;
-        rank_[b] = r;
+    vector<long> a(n);
+    rep(i,n) a[i] = i;
+    
+    vector<long> pos(n);
+    rep(i,n) pos[i] = i;
+
+    rep(_,q) {
+        /* rep(i,n) cout << a[i] + 1 << " "; cout << endl; */
+        long x;
+        cin >> x;
+        x--;
+
+        long p = pos[x];
+        long q = (p == n-1) ? p - 1 : p + 1;
+        long y = a[q];
+
+        swap(a[p], a[q]);
+        pos[x] = q;
+        pos[y] = p;
     }
-    rep(i,n) {
-        cout << val[i];
-        cout << ((i == n-1) ? "\n" : " ");
-    }
+    rep(i,n) cout << a[i] + 1 << " "; cout << endl;
 }
