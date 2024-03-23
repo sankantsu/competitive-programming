@@ -67,6 +67,7 @@ struct Solution {
     std::vector<Arrangement> arrangements;
     void print() {
         for (int d = 0; d < problem.d; d++) {
+            /* std::cerr << "----------------------" << std::endl; */
             for (int k = 0; k < problem.n; k++) {
                 auto rect = arrangements[d].rectangles[k];
                 auto [ul,lr] = rect;
@@ -108,19 +109,19 @@ int calc_score(const Solution& sol) {
 }
 
 auto make_horz_partitions() {
-    std::priority_queue<int> areas;
-    for (int d = 0; d < problem.d; d++) {
-        for (int k = 0; k < problem.n; k++) {
-            areas.push(problem.a[d][k]);
+    std::vector<int> largest_of_ranks;
+    for (int k = problem.n - 1; k >= 0; k--) {
+        int mx = 0;
+        for (int d = 0; d < problem.d; d++) {
+            mx = std::max(mx, problem.a[d][k]);
         }
+        largest_of_ranks.push_back(mx);
     }
 
     std::vector<int> hs{0};
     int x = 0;
-    while (!areas.empty()) {
-        int s = areas.top();
-        areas.pop();
-        int h = (s + problem.w - 1)/problem.w;
+    for (auto s : largest_of_ranks) {
+        int h = (s + problem.w - 1) / problem.w;
         x += h;
         if (x >= problem.w) break;
         hs.push_back(x);
@@ -131,65 +132,51 @@ auto make_horz_partitions() {
 
 Solution solve() {
     std::vector<int> hs = make_horz_partitions();
-    using Entry = std::pair<int, Rectangle>;  // area + rectangle
-    auto compare = [](const Entry& lhs, const Entry& rhs) {
-        if (lhs.first != rhs.first) return lhs.first < rhs.first;
-        int h1 = problem.w*lhs.second.upper_left.x + lhs.second.upper_left.y;
-        int h2 = problem.w*rhs.second.upper_left.x + rhs.second.upper_left.y;
-        return h1 < h2;
-    };
-    std::set<Entry, decltype(compare)> default_pool;
-    for (int k = 0; k < hs.size()-1; k++) {
-        int x1 = hs[k];
-        int x2 = hs[k+1];
-        int s = (x2 - x1) * problem.w;
-        default_pool.emplace(s, Rectangle{{x1, 0}, {x2, problem.w}});
-        /* std::cerr << "x1,x2: " << x1 << " " << x2 << std::endl; */
+    int m = hs.size() - 1;
+
+    using Rest = std::pair<int, size_t>;  // remaining area + row id
+    std::set<Rest> default_pool;
+    for (int k = 0; k < m; k++) {
+        int s = (hs[k+1] - hs[k]) * problem.w;
+        default_pool.emplace(s, k);
     }
 
-    std::vector<Arrangement> arrs;
+    std::vector<Arrangement> arr;
     for (int d = 0; d < problem.d; d++) {
-        decltype(default_pool) pool = default_pool;
-        std::vector<Rectangle> rectangles;
-        /* std::cerr << "------------------" << std::endl; */
+        /* std::cerr << "-----------------------" << std::endl; */
         /* std::cerr << "Day " << d << std::endl; */
+        decltype(default_pool) pool = default_pool;
+        std::vector<std::vector<int>> assignments(m);
         for (int k = problem.n - 1; k >= 0; k--) {
             int s = problem.a[d][k];
-            Rectangle dummy_rect = {{0,0},{0,0}};
-            auto it = pool.lower_bound(Entry{s, dummy_rect});
-            if (it != pool.end()) {
-                auto [ul, lr] = it->second;
-                int h = lr.x - ul.x;
+            auto it = pool.lower_bound(Rest{s, -1});
+            if (it == pool.end()) it--;
+            auto [r, row] = *it;
+            /* std::cerr << "k,row: " << k << " " << row << std::endl; */
+            int h = hs[row + 1] - hs[row];
+            int w = (s + h - 1) / h;
+            int rest = r - h*w;
+            assignments[row].push_back(k);
+            pool.erase(it);
+            pool.emplace(rest, row);
+        }
+        std::vector<Rectangle> arrangement(problem.n);
+        for (int row = 0; row < m; row++) {
+            const auto& ar = assignments[row];
+            int h = hs[row+1] - hs[row];
+            int y = 0;
+            for (int i = 0; i < ar.size(); i++) {
+                int k = ar[i];
+                int s = problem.a[d][k];
                 int w = (s + h - 1) / h;
-                rectangles.push_back(Rectangle{{ul.x, ul.y}, {lr.x, ul.y + w}});
-                pool.erase(it);
-                int s2 = (lr.x - ul.x) * (lr.y - ul.y - w);
-                if (ul.y + w != lr.y) pool.emplace(s2, Rectangle{{ul.x, ul.y + w}, {lr.x, lr.y}});
-            }
-            else if (!pool.empty()){
-                --it;
-                rectangles.push_back(it->second);
-                pool.erase(it);
-            }
-            else {
-                break;
+                int ny = (i == ar.size() - 1) ? problem.w : y + w;
+                arrangement[k] = Rectangle{{hs[row], y}, {hs[row+1], ny}};
+                y = ny;
             }
         }
-        if (rectangles.size() < problem.n) {
-            // 割り当て済の長方形を削ってまかなう
-            int m = problem.n - rectangles.size();
-            auto rect = rectangles[rectangles.size() - 1];
-            rectangles.pop_back();
-            auto [ul, lr] = rect;
-            int h = 1;
-            for (int k = 0; k < m+1; k++) {
-                rectangles.push_back(Rectangle{{ul.x + k*h, ul.y}, {ul.x + (k+1)*h, lr.y}});
-            }
-        }
-        std::reverse(rectangles.begin(), rectangles.end());
-        arrs.push_back(Arrangement{rectangles});
+        arr.push_back(Arrangement{arrangement});
     }
-    return Solution{arrs};
+    return Solution{arr};
 }
 
 Problem read_input() {
@@ -212,6 +199,6 @@ void init() {
 int main() {
     init();
     Solution sol = solve();
-    /* std::cerr << "Score: " << calc_score(sol) << std::endl; */
+    /* std::cerr << "Score: " << calc_score(sol) + 1 << std::endl; */
     sol.print();
 }
