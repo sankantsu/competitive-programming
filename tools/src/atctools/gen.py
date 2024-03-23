@@ -50,9 +50,13 @@ def save_sample_files(prefix, samples, directory):
         with open(path, "w") as f:
             pre = sample.find_next_sibling("pre")
             if pre is None:
-                pre = sample.find_next_sibling("section").find("pre")
-            txt = pre.text.lstrip()
-            f.write(txt)
+                if section := sample.find_next_sibling("section"):
+                    pre = section.find("pre")
+            if pre is None:
+                print("Warning: could not find any testcase")
+            else:
+                txt = pre.text.lstrip()
+                f.write(txt)
 
 
 def save_samples(contest_id: str, task_id: str, base_dir: pathlib.Path):
@@ -95,5 +99,5 @@ def gen_testcases(contest_id: str, base_dir: pathlib.Path) -> None:
 def new_contest(args):
     contest_id = args.contest_id
     pth = pathlib.Path(contest_id)
-    pth.mkdir()
+    pth.mkdir(exist_ok=True)
     gen_testcases(contest_id, pth)

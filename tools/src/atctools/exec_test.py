@@ -14,7 +14,7 @@ def exec_test(args):
         outfile = base_dir / f"out-{num}.txt"
         print(f"Running test {num}...")
         with infile.open() as in_f:
-            cmd = [args.prog]
+            cmd = [args.prog] + args.args
             proc = subprocess.run(cmd, stdin=in_f, capture_output=True, text=True)
             out = proc.stdout
         with outfile.open() as out_f:
