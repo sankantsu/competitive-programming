@@ -2,9 +2,8 @@
 #include <vector>
 #include <algorithm>
 #include <set>
-#include <map>
-#include <queue>
 #include <random>
+#include <cassert>
 
 static std::mt19937 mt;
 static std::uniform_real_distribution<double> uniform(0., 1.);
@@ -207,7 +206,7 @@ struct RowAssignment {
         _day(day), _assignments(problem.n),
         _assigned_sizes(nrow), _n_col(nrow)
     {
-        init_random();
+        init_greedy();
     }
     long calc_penalty() {
         long penalty = 0;
@@ -218,7 +217,10 @@ struct RowAssignment {
                 penalty += 100*(s - cap);
             }
             else {
-                penalty += 10*(cap - s);
+                penalty += (cap - s)/10;
+            }
+            if (_n_col[i] == 0) {
+                penalty += problem.w;
             }
             int n_partition = std::max(0, _n_col[i] - 1);
             int l = get_height(i);
@@ -247,6 +249,30 @@ struct RowAssignment {
             _n_col[r]++;
         }
     }
+    void init_greedy() {
+        using Row = std::pair<int, int>;  // remaining size, row id
+        std::set<Row> pool;
+        for (int row = 0; row < nrow; row++) {
+            int h = get_height(row);
+            int s = h * problem.w;
+            pool.emplace(s, row);
+        }
+        for (int k = problem.n - 1; k >= 0; k--) {
+            int s0 = problem.a[_day][k];
+            auto it = pool.lower_bound(Row{s0, -1});
+            if (it == pool.end()) {
+                it = std::prev(it);
+            }
+            auto [rest, row] = *it;
+            int s = calc_section_size(k, row);
+            _assignments[k] = std::make_pair(s, row);
+            _assigned_sizes[row] += s;
+            _n_col[row]++;
+
+            pool.erase(it);
+            pool.emplace(rest - s, row);
+        }
+    }
     // move k th section to row
     void move(int k, int row) {
         // remove old assignment
@@ -272,16 +298,53 @@ struct RowAssignment {
         _assignments[l] = std::make_pair(ns2, i);
         _assigned_sizes[i] += ns2;
         _assigned_sizes[j] += ns1;
-        assert(_assigned_sizes[i] > 0);
-        assert(_assigned_sizes[j] > 0);
+    }
+    void greedy_rearrange(const std::vector<int>& rows) {
+        std::vector<int> ks;
+        for (int k = problem.n - 1; k >= 0; k--) {
+            auto [s, row] = _assignments[k];
+            if (std::find(rows.begin(), rows.end(), row) != rows.end()) {
+                ks.push_back(k);
+            }
+        }
+        for (auto row : rows) {
+            _assigned_sizes[row] = 0;
+            _n_col[row] = 0;
+        }
+        using Row = std::pair<int, int>;  // remaining size, row id
+        std::set<Row> pool;
+        for (auto row : rows) {
+            int h = get_height(row);
+            int s = h * problem.w;
+            pool.emplace(s, row);
+        }
+        for (auto k : ks) {
+            int s0 = problem.a[_day][k];
+            auto it = pool.lower_bound(Row{s0, -1});
+            if (it == pool.end()) {
+                it = std::prev(it);
+            }
+            auto [rest, row] = *it;
+            int s = calc_section_size(k, row);
+            _assignments[k] = std::make_pair(s, row);
+            _assigned_sizes[row] += s;
+            _n_col[row]++;
+
+            pool.erase(it);
+            pool.emplace(rest - s, row);
+        }
     }
     enum class Strategy {
         SWAP,
         MOVE,
+        REARRANGE,
     };
     Strategy select_strategy() {
-        int r = mt() % 10;
-        if (r < 8) {
+        int r = mt() % 100;
+        if (r < 1) {
+            return Strategy::REARRANGE;
+        }
+        else if (r < 80) {
             return Strategy::SWAP;
         }
         else {
@@ -289,7 +352,7 @@ struct RowAssignment {
         }
     }
     void climb() {
-        constexpr int max_iter = 1000000;
+        constexpr int max_iter = 500000;
         int iter = 0;
         long current_score = -calc_penalty();
         double start_temp = 100000;
@@ -328,6 +391,28 @@ struct RowAssignment {
                 }
                 else {
                     swap(k, l);
+                }
+            }
+            else if (strategy == Strategy::REARRANGE) {
+                int n_rearrange = 2;
+                std::set<int> rows;
+                while (rows.size() < n_rearrange) {
+                    int row = mt() % nrow;
+                    rows.insert(row);
+                }
+                auto saved_assignments = _assignments;
+                auto saved_sizes = _assigned_sizes;
+                auto saved_n_col = _n_col;
+                int org_score = current_score;
+                greedy_rearrange(std::vector(rows.begin(), rows.end()));
+                int score = -calc_penalty();
+                if (score > org_score) {
+                    current_score = score;
+                }
+                else {
+                    _assignments = saved_assignments;
+                    _assigned_sizes = saved_sizes;
+                    _n_col = saved_n_col;
                 }
             }
         }
