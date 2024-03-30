@@ -4,7 +4,10 @@
 #include <set>
 #include <map>
 #include <queue>
+#include <random>
 
+static std::mt19937 mt;
+static std::uniform_real_distribution<double> uniform(0., 1.);
 
 struct Problem {
     Problem() {}
@@ -156,9 +159,9 @@ auto find_matching(int d1, int d2) {
 
 struct RowAssignment {
     using Rest = std::pair<int, size_t>;  // remaining area + row id
-    static int nrow;
-    static std::vector<int> horz_partitions;
-    static std::set<Rest> default_pool;
+    static inline int nrow;
+    static inline std::vector<int> horz_partitions;
+    static inline std::vector<int> capacities;
 
     static void init_horz_partitions() {
         std::vector<int> largest_of_ranks;
@@ -182,112 +185,191 @@ struct RowAssignment {
         horz_partitions = std::move(hs);
 
         nrow = horz_partitions.size() - 1;
-        for (int k = 0; k < nrow; k++) {
-            int s = (horz_partitions[k+1] - horz_partitions[k]) * problem.w;
-            default_pool.emplace(s, k);
+        for (int i = 0; i < nrow; i++) {
+            int s = (horz_partitions[i+1] - horz_partitions[i]) * problem.w;
+            capacities.push_back(s);
         }
     }
-
-    RowAssignment() : _assignments(nrow) {
-        init_pool();
+    static int get_height(int row) {
+        return horz_partitions[row + 1] - horz_partitions[row];
     }
-    void init_pool() {
-        _pool = default_pool;
-    }
-    auto find_best_fit(int size) {
-        auto it = _pool.lower_bound(Rest{size, -1});
-        if (it == _pool.end()) it--;
-        return it;
-    }
-    void add_assignment(int s, int k) {
-        auto it = find_best_fit(s);
-        auto [r, row] = *it;
-        int h = horz_partitions[row + 1] - horz_partitions[row];
+    int calc_section_width(int k, int row) {
+        int s = problem.a[_day][k];
+        int h = get_height(row);
         int w = (s + h - 1) / h;
-        int rest = r - h*w;
-        _assignments[row].emplace_back(s, k);
-        _pool.erase(it);
-        _pool.emplace(rest, row);
+        return w;
     }
-    void fill_empty_row(int d) {
-        int m = _assignments.size();
-        for (int row = 0; row < m; row++) {
-            if (_assignments[row].empty()) {
-                // move one entry to empty row
-                int free = (horz_partitions[row+1] - horz_partitions[row]) * problem.w;
-                bool done = false;
-                for (int i = 0; i < m; i++) {
-                    if (done) break;
-                    if (i == row) continue;
-                    for (int j = _assignments[i].size() - 1; j >= 1; j--) {
-                        auto [_, k] = _assignments[i][j];
-                        int s = problem.a[d][k];
-                        if (s <= free) {
-                            auto it = _assignments[i].begin() + j;
-                            _assignments[i].erase(it);
-                            _assignments[row].emplace_back(s, k);
-                            done = true;
-                            break;
-                        }
-                    }
+    int calc_section_size(int k, int row) {
+        return get_height(row) * calc_section_width(k, row);
+    }
+
+    RowAssignment(int day) :
+        _day(day), _assignments(problem.n),
+        _assigned_sizes(nrow), _n_col(nrow)
+    {
+        init_random();
+    }
+    long calc_penalty() {
+        long penalty = 0;
+        for (int i = 0; i < nrow; i++) {
+            int cap = capacities[i];
+            int s = _assigned_sizes[i];
+            if (cap < s) {
+                penalty += 100*(s - cap);
+            }
+            else {
+                penalty += 10*(cap - s);
+            }
+            int n_partition = std::max(0, _n_col[i] - 1);
+            int l = get_height(i);
+            penalty += l*n_partition;
+        }
+        return penalty;
+    }
+    void debug_print() {
+        std::cerr << "_assignments:" << std::endl;
+        for (int k = 0; k < problem.n; k++) {
+            auto [s, row] = _assignments[k];
+            std::cerr << k << " -> (" << s << ", " << row << ")" << std::endl;
+        }
+        std::cerr << "_assigned sizes:" << std::endl;
+        for (int i = 0; i < nrow; i++) {
+            std::cerr << _assigned_sizes[i] << std::endl;
+        }
+    }
+    void init_random() {
+        for (int k = 0; k < problem.n; k++) {
+            int r = mt() % nrow;
+            int s0 = problem.a[_day][k];
+            int s = calc_section_size(k, r);
+            _assignments[k] = std::make_pair(s, r);
+            _assigned_sizes[r] += s;
+            _n_col[r]++;
+        }
+    }
+    // move k th section to row
+    void move(int k, int row) {
+        // remove old assignment
+        auto [s, i] = _assignments[k];
+        _assigned_sizes[i] -= s;
+        _n_col[i]--;
+        // new assignment
+        int ns = calc_section_size(k, row);
+        _assignments[k] = std::make_pair(ns, row);
+        _assigned_sizes[row] += ns;
+        _n_col[row]++;
+    }
+    // swap position of k the section and l th section
+    void swap(int k, int l) {
+        auto [s1, i] = _assignments[k];
+        auto [s2, j] = _assignments[l];
+        _assigned_sizes[i] -= s1;
+        _assigned_sizes[j] -= s2;
+
+        int ns1 = calc_section_size(k, j);
+        int ns2 = calc_section_size(l, i);
+        _assignments[k] = std::make_pair(ns1, j);
+        _assignments[l] = std::make_pair(ns2, i);
+        _assigned_sizes[i] += ns2;
+        _assigned_sizes[j] += ns1;
+        assert(_assigned_sizes[i] > 0);
+        assert(_assigned_sizes[j] > 0);
+    }
+    enum class Strategy {
+        SWAP,
+        MOVE,
+    };
+    Strategy select_strategy() {
+        int r = mt() % 10;
+        if (r < 8) {
+            return Strategy::SWAP;
+        }
+        else {
+            return Strategy::MOVE;
+        }
+    }
+    void climb() {
+        constexpr int max_iter = 1000000;
+        int iter = 0;
+        long current_score = -calc_penalty();
+        double start_temp = 100000;
+        double end_temp = 100;
+        while (iter++ < max_iter) {
+            double temp = start_temp + (end_temp - start_temp)*iter / max_iter;
+            auto strategy = select_strategy();
+            if (strategy == Strategy::MOVE) {
+                int k = mt() % problem.n;
+                int r = mt() % nrow;
+                int org_row = _assignments[k].second;
+                move(k, r);
+
+                long score = -calc_penalty();
+                double prob = std::exp(static_cast<double>(score - current_score)/temp);
+                double rd = uniform(mt);
+                if (rd < prob) {
+                    current_score = score;
+                    /* std::cerr << "score: " << score << std::endl; */
+                }
+                else {
+                    move(k, org_row);
+                }
+            }
+            else if (strategy == Strategy::SWAP) {
+                int k = mt() % problem.n;
+                int l = mt() % problem.n;
+                swap(k, l);
+
+                long score = -calc_penalty();
+                double prob = std::exp(static_cast<double>(score - current_score)/temp);
+                double rd = uniform(mt);
+                if (rd < prob) {
+                    current_score = score;
+                    /* std::cerr << "score: " << score << std::endl; */
+                }
+                else {
+                    swap(k, l);
                 }
             }
         }
     }
     Arrangement to_arrangement() const {
         std::vector<Rectangle> arrangement(problem.n);
-        int m = _assignments.size();
-        for (int row = 0; row < m; row++) {
-            const auto& ar = _assignments[row];
-            int h = horz_partitions[row+1] - horz_partitions[row];
-            int y = 0;
-            for (int i = 0; i < ar.size(); i++) {
-                auto [s, k] = ar[i];
-                int w = (s + h - 1) / h;
-                int ny = (i == ar.size() - 1) ? problem.w : y + w;
-                arrangement[k] = Rectangle{{horz_partitions[row], y}, {horz_partitions[row+1], ny}};
-                y = ny;
-            }
+        std::vector<int> last_section(nrow);
+        for (int k = 0; k < problem.n; k++) {
+            auto [s, row] = _assignments[k];
+            last_section[row] = k;
+        }
+        std::vector<int> ys(nrow);
+        for (int k = 0; k < problem.n; k++) {
+            auto [s, row] = _assignments[k];
+            int x1 = horz_partitions[row];
+            int x2 = horz_partitions[row+1];
+            int h = x2 - x1;
+            int w = (s + h - 1) / h;
+            int y1 = ys[row];
+            int y2 = (last_section[row] == k) ? problem.w : y1 + w;
+            Rectangle rect {{x1, y1}, {x2, y2}};
+            arrangement[k] = rect;
+
+            ys[row] = y2;
         }
         return Arrangement{arrangement};
     }
 
     private:
     using Entry = std::pair<int, int>;  // size, id
-    std::vector<std::vector<Entry>> _assignments;
-    std::set<Rest> _pool;
+    int _day;
+    std::vector<Entry> _assignments;  // section id -> (section size, row id)
+    std::vector<int> _n_col;  // row id -> number of sections for the row
+    std::vector<int> _assigned_sizes;  // row id -> sum of assigned size
 };
-int RowAssignment::nrow;
-std::vector<int> RowAssignment::horz_partitions;
-std::set<RowAssignment::Rest> RowAssignment::default_pool;
 
 Solution solve() {
     std::vector<RowAssignment> ras;
-    for (int d = 0; d < problem.d; d += 2) {
-        std::cerr << "-----------------------" << std::endl;
-        int d1 = d;
-        int d2 = (d1 == problem.d - 1) ? d1 : d1 + 1;
-        std::map<int, int> mp1;  // id -> extended area
-        std::map<int, int> mp2;
-        auto ms = find_matching(d1, d2);
-        std::vector<RowAssignment> ra(2);
-        int n_pad = problem.n/3;
-        for (int i = 0; i < n_pad; i++) {
-            auto m = ms[i];
-            int s = m.value;
-            mp1[m.indices[0]] = s;
-            mp2[m.indices[1]] = s;
-        }
-        for (int k = problem.n - 1; k >= 0; k--) {
-            int s1 = (mp1.find(k) != mp1.end()) ? mp1[k] : problem.a[d1][k];
-            int s2 = (mp2.find(k) != mp2.end()) ? mp2[k] : problem.a[d2][k];
-            ra[0].add_assignment(s1,k);
-            ra[1].add_assignment(s2,k);
-        }
-        ra[0].fill_empty_row(d1);
-        ra[1].fill_empty_row(d2);
-        ras.push_back(ra[0]);
-        if (d1 != d2) ras.push_back(ra[1]);
+    for (int d = 0; d < problem.d; d++) {
+        RowAssignment ra(d);
+        ra.climb();
+        ras.push_back(ra);
     }
 
     std::vector<Arrangement> arr;
