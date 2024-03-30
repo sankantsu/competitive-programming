@@ -7,10 +7,21 @@
 
 
 struct Problem {
+    Problem() {}
+    Problem(int w_, int d_, int n_, std::vector<std::vector<int>>&& a_)
+        : w(w_), d(d_), n(n_), a(std::move(a_))
+    {
+        for (int i = 0; i < d; i++) {
+            int s = 0;
+            for (auto x : a[i]) s += x;
+            sum.push_back(s);
+        }
+    }
     int w;
     int d;
     int n;
     std::vector<std::vector<int>> a;
+    std::vector<int> sum;
 };
 static Problem problem;
 
@@ -120,6 +131,7 @@ int find_nearest(const std::vector<int>& v, int x) {
     };
     auto it = std::lower_bound(v.begin(), v.end(), x);
     auto it2 = (it != v.begin()) ? std::prev(it) : v.begin();
+    if (it == v.end()) it = std::prev(it);
     it = (cost(*it) < cost(*it2)) ? it : it2;
     return std::distance(v.begin(), it);
 }
@@ -133,7 +145,7 @@ auto find_matching(int d1, int d2) {
         int k2 = find_nearest(a2, v1);
         int v2 = a2[k2];
         Matching m {
-            .cost = std::abs(v2 - v1), .value = v2,
+            .cost = std::abs(v2 - v1), .value = std::max(v1, v2),
             .indices = std::vector<int>{k, k2},
         };
         ms.push_back(std::move(m));
@@ -171,7 +183,7 @@ struct RowAssignment {
 
         nrow = horz_partitions.size() - 1;
         for (int k = 0; k < nrow; k++) {
-            int s = (hs[k+1] - hs[k]) * problem.w;
+            int s = (horz_partitions[k+1] - horz_partitions[k]) * problem.w;
             default_pool.emplace(s, k);
         }
     }
@@ -193,7 +205,7 @@ struct RowAssignment {
         int h = horz_partitions[row + 1] - horz_partitions[row];
         int w = (s + h - 1) / h;
         int rest = r - h*w;
-        _assignments[row].push_back(k);
+        _assignments[row].emplace_back(s, k);
         _pool.erase(it);
         _pool.emplace(rest, row);
     }
@@ -208,12 +220,12 @@ struct RowAssignment {
                     if (done) break;
                     if (i == row) continue;
                     for (int j = _assignments[i].size() - 1; j >= 1; j--) {
-                        int k = _assignments[i][j];
+                        auto [_, k] = _assignments[i][j];
                         int s = problem.a[d][k];
                         if (s <= free) {
                             auto it = _assignments[i].begin() + j;
                             _assignments[i].erase(it);
-                            _assignments[row].push_back(k);
+                            _assignments[row].emplace_back(s, k);
                             done = true;
                             break;
                         }
@@ -222,7 +234,7 @@ struct RowAssignment {
             }
         }
     }
-    Arrangement to_arrangement(int d) const {
+    Arrangement to_arrangement() const {
         std::vector<Rectangle> arrangement(problem.n);
         int m = _assignments.size();
         for (int row = 0; row < m; row++) {
@@ -230,8 +242,7 @@ struct RowAssignment {
             int h = horz_partitions[row+1] - horz_partitions[row];
             int y = 0;
             for (int i = 0; i < ar.size(); i++) {
-                int k = ar[i];
-                int s = problem.a[d][k];
+                auto [s, k] = ar[i];
                 int w = (s + h - 1) / h;
                 int ny = (i == ar.size() - 1) ? problem.w : y + w;
                 arrangement[k] = Rectangle{{horz_partitions[row], y}, {horz_partitions[row+1], ny}};
@@ -242,27 +253,46 @@ struct RowAssignment {
     }
 
     private:
-    std::vector<std::vector<int>> _assignments;
+    using Entry = std::pair<int, int>;  // size, id
+    std::vector<std::vector<Entry>> _assignments;
     std::set<Rest> _pool;
 };
+int RowAssignment::nrow;
+std::vector<int> RowAssignment::horz_partitions;
+std::set<RowAssignment::Rest> RowAssignment::default_pool;
 
 Solution solve() {
     std::vector<RowAssignment> ras;
-    for (int d = 0; d < problem.d; d++) {
-        /* std::cerr << "-----------------------" << std::endl; */
-        /* std::cerr << "Day " << d << std::endl; */
-        RowAssignment ra{};
-        for (int k = problem.n - 1; k >= 0; k--) {
-            int s = problem.a[d][k];
-            ra.add_assignment(s, k);
+    for (int d = 0; d < problem.d; d += 2) {
+        std::cerr << "-----------------------" << std::endl;
+        int d1 = d;
+        int d2 = (d1 == problem.d - 1) ? d1 : d1 + 1;
+        std::map<int, int> mp1;  // id -> extended area
+        std::map<int, int> mp2;
+        auto ms = find_matching(d1, d2);
+        std::vector<RowAssignment> ra(2);
+        int n_pad = problem.n/3;
+        for (int i = 0; i < n_pad; i++) {
+            auto m = ms[i];
+            int s = m.value;
+            mp1[m.indices[0]] = s;
+            mp2[m.indices[1]] = s;
         }
-        ra.fill_empty_row(d);
-        ras.push_back(ra);
+        for (int k = problem.n - 1; k >= 0; k--) {
+            int s1 = (mp1.find(k) != mp1.end()) ? mp1[k] : problem.a[d1][k];
+            int s2 = (mp2.find(k) != mp2.end()) ? mp2[k] : problem.a[d2][k];
+            ra[0].add_assignment(s1,k);
+            ra[1].add_assignment(s2,k);
+        }
+        ra[0].fill_empty_row(d1);
+        ra[1].fill_empty_row(d2);
+        ras.push_back(ra[0]);
+        if (d1 != d2) ras.push_back(ra[1]);
     }
 
     std::vector<Arrangement> arr;
     for (int d = 0; d < problem.d; d++) {
-        arr.push_back(ras[d].to_arrangement(d));
+        arr.push_back(ras[d].to_arrangement());
     }
     return Solution{arr};
 }
@@ -277,7 +307,7 @@ Problem read_input() {
             std::cin >> a[i][j];
         }
     }
-    return Problem {w, d, n, std::move(a)};
+    return Problem(w, d, n, std::move(a));
 }
 
 void init() {
