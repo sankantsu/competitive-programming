@@ -208,23 +208,28 @@ struct RowAssignment {
     {
         init_greedy();
     }
-    long calc_penalty() {
+    int row_penalty(int row) {
+        int penalty = 0;
+        int cap = capacities[row];
+        int s = _assigned_sizes[row];
+        if (cap < s) {
+            penalty += 100*(s - cap);
+        }
+        else {
+            penalty += (cap - s)/10;
+        }
+        if (_n_col[row] == 0) {
+            penalty += problem.w;
+        }
+        int n_partition = std::max(0, _n_col[row] - 1);
+        int l = get_height(row);
+        penalty += l*n_partition;
+        return penalty;
+    }
+    int calc_penalty() {
         long penalty = 0;
         for (int i = 0; i < nrow; i++) {
-            int cap = capacities[i];
-            int s = _assigned_sizes[i];
-            if (cap < s) {
-                penalty += 100*(s - cap);
-            }
-            else {
-                penalty += (cap - s)/10;
-            }
-            if (_n_col[i] == 0) {
-                penalty += problem.w;
-            }
-            int n_partition = std::max(0, _n_col[i] - 1);
-            int l = get_height(i);
-            penalty += l*n_partition;
+            penalty += row_penalty(i);
         }
         return penalty;
     }
@@ -274,9 +279,10 @@ struct RowAssignment {
         }
     }
     // move k th section to row
-    void move(int k, int row) {
+    int move(int k, int row) {
         // remove old assignment
         auto [s, i] = _assignments[k];
+        int prev_penalty = row_penalty(i) + row_penalty(row);
         _assigned_sizes[i] -= s;
         _n_col[i]--;
         // new assignment
@@ -284,11 +290,15 @@ struct RowAssignment {
         _assignments[k] = std::make_pair(ns, row);
         _assigned_sizes[row] += ns;
         _n_col[row]++;
+        int new_penalty = row_penalty(i) + row_penalty(row);
+        return -(new_penalty - prev_penalty);
     }
     // swap position of k the section and l th section
-    void swap(int k, int l) {
+    int swap(int k, int l) {
         auto [s1, i] = _assignments[k];
         auto [s2, j] = _assignments[l];
+        int prev_penalty = row_penalty(i) + row_penalty(j);
+
         _assigned_sizes[i] -= s1;
         _assigned_sizes[j] -= s2;
 
@@ -298,8 +308,16 @@ struct RowAssignment {
         _assignments[l] = std::make_pair(ns2, i);
         _assigned_sizes[i] += ns2;
         _assigned_sizes[j] += ns1;
+
+        int new_penalty = row_penalty(i) + row_penalty(j);
+        return -(new_penalty - prev_penalty);
     }
-    void greedy_rearrange(const std::vector<int>& rows) {
+    int greedy_rearrange(const std::vector<int>& rows) {
+        int prev_penalty = 0;
+        for (auto row : rows) {
+            prev_penalty += row_penalty(row);
+        }
+
         std::vector<int> ks;
         for (int k = problem.n - 1; k >= 0; k--) {
             auto [s, row] = _assignments[k];
@@ -333,6 +351,12 @@ struct RowAssignment {
             pool.erase(it);
             pool.emplace(rest - s, row);
         }
+
+        int new_penalty = 0;
+        for (auto row : rows) {
+            new_penalty += row_penalty(row);
+        }
+        return -(new_penalty - prev_penalty);
     }
     enum class Strategy {
         SWAP,
@@ -352,26 +376,30 @@ struct RowAssignment {
         }
     }
     void climb() {
-        constexpr int max_iter = 500000;
+        const int max_iter = 25000000/problem.d;
         int iter = 0;
-        long current_score = -calc_penalty();
+        int current_score = -calc_penalty();
+        int best_score = current_score;
+        RowAssignment best_assignment = *this;
         double start_temp = 100000;
         double end_temp = 100;
         while (iter++ < max_iter) {
+            if (current_score > best_score) {
+                best_score = current_score;
+                best_assignment = *this;
+            }
             double temp = start_temp + (end_temp - start_temp)*iter / max_iter;
             auto strategy = select_strategy();
             if (strategy == Strategy::MOVE) {
                 int k = mt() % problem.n;
                 int r = mt() % nrow;
                 int org_row = _assignments[k].second;
-                move(k, r);
+                int score_diff = move(k, r);
 
-                long score = -calc_penalty();
-                double prob = std::exp(static_cast<double>(score - current_score)/temp);
+                double prob = std::exp(static_cast<double>(score_diff)/temp);
                 double rd = uniform(mt);
                 if (rd < prob) {
-                    current_score = score;
-                    /* std::cerr << "score: " << score << std::endl; */
+                    current_score += score_diff;
                 }
                 else {
                     move(k, org_row);
@@ -380,14 +408,13 @@ struct RowAssignment {
             else if (strategy == Strategy::SWAP) {
                 int k = mt() % problem.n;
                 int l = mt() % problem.n;
-                swap(k, l);
+                int score_diff = swap(k, l);
 
-                long score = -calc_penalty();
-                double prob = std::exp(static_cast<double>(score - current_score)/temp);
+                int score = -calc_penalty();
+                double prob = std::exp(static_cast<double>(score_diff)/temp);
                 double rd = uniform(mt);
                 if (rd < prob) {
-                    current_score = score;
-                    /* std::cerr << "score: " << score << std::endl; */
+                    current_score += score_diff;
                 }
                 else {
                     swap(k, l);
@@ -403,11 +430,9 @@ struct RowAssignment {
                 auto saved_assignments = _assignments;
                 auto saved_sizes = _assigned_sizes;
                 auto saved_n_col = _n_col;
-                int org_score = current_score;
-                greedy_rearrange(std::vector(rows.begin(), rows.end()));
-                int score = -calc_penalty();
-                if (score > org_score) {
-                    current_score = score;
+                int score_diff = greedy_rearrange(std::vector(rows.begin(), rows.end()));
+                if (score_diff > 0) {
+                    current_score += score_diff;
                 }
                 else {
                     _assignments = saved_assignments;
@@ -416,6 +441,7 @@ struct RowAssignment {
                 }
             }
         }
+        *this = best_assignment;
     }
     Arrangement to_arrangement() const {
         std::vector<Rectangle> arrangement(problem.n);
