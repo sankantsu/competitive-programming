@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <set>
 #include <random>
+#include <chrono>
 #include <cassert>
 
 static std::mt19937 mt;
@@ -383,21 +384,25 @@ struct RowAssignment {
         }
     }
     void climb() {
-        const int max_iter = 30000000/problem.d;
-        int iter = 0;
+        const int duration = 2800 / problem.d;
+        auto start_time = std::chrono::steady_clock::now();
         int current_score = -calc_penalty();
         int best_score = current_score;
         RowAssignment best_assignment = *this;
         double start_temp = 100000;
         double end_temp = 2000;
-        while (iter++ < max_iter) {
-            double temp = start_temp + (end_temp - start_temp)*iter / max_iter;
+        while (true) {
+            auto t = std::chrono::steady_clock::now();
+            int elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(t - start_time).count();
+            if (elapsed > duration) {
+                break;
+            }
+            double temp = start_temp + (end_temp - start_temp) * elapsed / duration;
             if (current_score > best_score) {
                 best_score = current_score;
                 best_assignment = *this;
                 /* std::cerr << "--------------------------" << std::endl; */
                 /* std::cerr << "Day " << _day << " best_score: " << best_score << std::endl; */
-                /* std::cerr << "iter, temp: " << iter << " " << temp <<std::endl; */
             }
             auto strategy = select_strategy();
             if (strategy == Strategy::MOVE) {
