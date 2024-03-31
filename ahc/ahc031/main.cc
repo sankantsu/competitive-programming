@@ -371,11 +371,11 @@ struct RowAssignment {
         REARRANGE,
     };
     Strategy select_strategy() {
-        int r = mt() % 100;
+        int r = mt() % 300;
         if (r < 1) {
             return Strategy::REARRANGE;
         }
-        else if (r < 80) {
+        else if (r < 240) {
             return Strategy::SWAP;
         }
         else {
@@ -383,24 +383,29 @@ struct RowAssignment {
         }
     }
     void climb() {
-        const int max_iter = 25000000/problem.d;
+        const int max_iter = 30000000/problem.d;
         int iter = 0;
         int current_score = -calc_penalty();
         int best_score = current_score;
         RowAssignment best_assignment = *this;
         double start_temp = 100000;
-        double end_temp = 100;
+        double end_temp = 2000;
         while (iter++ < max_iter) {
+            double temp = start_temp + (end_temp - start_temp)*iter / max_iter;
             if (current_score > best_score) {
                 best_score = current_score;
                 best_assignment = *this;
+                /* std::cerr << "--------------------------" << std::endl; */
+                /* std::cerr << "Day " << _day << " best_score: " << best_score << std::endl; */
+                /* std::cerr << "iter, temp: " << iter << " " << temp <<std::endl; */
             }
-            double temp = start_temp + (end_temp - start_temp)*iter / max_iter;
             auto strategy = select_strategy();
             if (strategy == Strategy::MOVE) {
                 int k = mt() % problem.n;
                 int r = mt() % nrow;
                 int org_row = _assignments[k].second;
+                if (r == org_row) continue;
+
                 int score_diff = move(k, r);
 
                 double prob = std::exp(static_cast<double>(score_diff)/temp);
@@ -415,6 +420,8 @@ struct RowAssignment {
             else if (strategy == Strategy::SWAP) {
                 int k = mt() % problem.n;
                 int l = mt() % problem.n;
+                if (k == l) continue;
+
                 int score_diff = swap(k, l);
 
                 int score = -calc_penalty();
@@ -448,6 +455,8 @@ struct RowAssignment {
                 }
             }
         }
+        std::cerr << "--------------------------" << std::endl;
+        std::cerr << "Day " << _day << " best_score: " << best_score << std::endl;
         *this = best_assignment;
     }
     auto get_row_assignments() const {
