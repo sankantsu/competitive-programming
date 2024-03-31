@@ -200,13 +200,13 @@ struct RowAssignment {
     static int get_height(int row) {
         return horz_partitions[row + 1] - horz_partitions[row];
     }
-    int calc_section_width(int k, int row) {
+    int calc_section_width(int k, int row) const {
         int s = problem.a[_day][k];
         int h = get_height(row);
         int w = (s + h - 1) / h;
         return w;
     }
-    int calc_section_size(int k, int row) {
+    int calc_section_size(int k, int row) const {
         return get_height(row) * calc_section_width(k, row);
     }
 
@@ -216,7 +216,7 @@ struct RowAssignment {
     {
         init_greedy();
     }
-    int row_penalty(int row) {
+    int row_penalty(int row) const {
         int penalty = 0;
         int cap = capacities[row];
         int s = _assigned_sizes[row];
@@ -320,12 +320,59 @@ struct RowAssignment {
         int new_penalty = row_penalty(i) + row_penalty(j);
         return -(new_penalty - prev_penalty);
     }
-    int greedy_rearrange(const std::vector<int>& rows) {
+    int greedy_rearrange_score(const std::vector<int>& rows) const {
         int prev_penalty = 0;
         for (auto row : rows) {
             prev_penalty += row_penalty(row);
         }
 
+        std::vector<int> ks;
+        for (int k = problem.n - 1; k >= 0; k--) {
+            auto [s, row] = _assignments[k];
+            if (std::find(rows.begin(), rows.end(), row) != rows.end()) {
+                ks.push_back(k);
+            }
+        }
+
+        int new_penalty = 0;
+        using Row = std::pair<int, int>;  // remaining size, row id
+        std::set<Row> pool;
+        for (auto row : rows) {
+            int h = get_height(row);
+            int s = h * problem.w;
+            pool.emplace(s, row);
+        }
+        for (auto k : ks) {
+            int s0 = problem.a[_day][k];
+            auto it = pool.lower_bound(Row{s0, -1});
+            if (it == pool.end()) {
+                it = std::prev(it);
+            }
+            auto [rest, row] = *it;
+            int h = get_height(row);
+            int s = calc_section_size(k, row);
+            if (rest < h*problem.w) {  // add new vertical partition
+                new_penalty += 2*h;
+            }
+
+            pool.erase(it);
+            pool.emplace(rest - s, row);
+        }
+        for (auto [rest, row] : pool) {
+            if (rest == get_height(row) * problem.w) {
+                // no assignment
+                new_penalty += problem.w;
+            }
+            if (rest > 0) {
+                new_penalty += rest/10;
+            }
+            if (rest < 0) {
+                new_penalty += -rest*100;
+            }
+        }
+        return -(new_penalty - prev_penalty);
+    }
+    void greedy_rearrange(const std::vector<int>& rows) {
         std::vector<int> ks;
         for (int k = problem.n - 1; k >= 0; k--) {
             auto [s, row] = _assignments[k];
@@ -359,12 +406,6 @@ struct RowAssignment {
             pool.erase(it);
             pool.emplace(rest - s, row);
         }
-
-        int new_penalty = 0;
-        for (auto row : rows) {
-            new_penalty += row_penalty(row);
-        }
-        return -(new_penalty - prev_penalty);
     }
     enum class Strategy {
         SWAP,
@@ -384,6 +425,7 @@ struct RowAssignment {
         }
     }
     void climb() {
+        /* static int iter_sum = 0; */
         const int duration = 2800 / problem.d;
         auto start_time = std::chrono::steady_clock::now();
         int current_score = -calc_penalty();
@@ -391,18 +433,31 @@ struct RowAssignment {
         RowAssignment best_assignment = *this;
         double start_temp = 100000;
         double end_temp = 2000;
+
+        int iter = 0;
+        double temp;
+        auto accept = [&temp](int score_diff) {
+            double x = static_cast<double>(score_diff) / temp;
+            double prob = std::exp(x);
+            double r = uniform(mt);
+            return r < prob;
+        };
         while (true) {
-            auto t = std::chrono::steady_clock::now();
-            int elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(t - start_time).count();
-            if (elapsed > duration) {
-                break;
+            ++iter;
+            if (iter % 1000 == 0) {
+                auto t = std::chrono::steady_clock::now();
+                int elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(t - start_time).count();
+                temp = start_temp + (end_temp - start_temp) * elapsed / duration;
+                if (elapsed > duration) {
+                    break;
+                }
             }
-            double temp = start_temp + (end_temp - start_temp) * elapsed / duration;
             if (current_score > best_score) {
                 best_score = current_score;
                 best_assignment = *this;
                 /* std::cerr << "--------------------------" << std::endl; */
                 /* std::cerr << "Day " << _day << " best_score: " << best_score << std::endl; */
+                /* std::cerr << "temp: " << temp << std::endl; */
             }
             auto strategy = select_strategy();
             if (strategy == Strategy::MOVE) {
@@ -412,10 +467,7 @@ struct RowAssignment {
                 if (r == org_row) continue;
 
                 int score_diff = move(k, r);
-
-                double prob = std::exp(static_cast<double>(score_diff)/temp);
-                double rd = uniform(mt);
-                if (rd < prob) {
+                if (accept(score_diff)) {
                     current_score += score_diff;
                 }
                 else {
@@ -428,11 +480,7 @@ struct RowAssignment {
                 if (k == l) continue;
 
                 int score_diff = swap(k, l);
-
-                int score = -calc_penalty();
-                double prob = std::exp(static_cast<double>(score_diff)/temp);
-                double rd = uniform(mt);
-                if (rd < prob) {
+                if (accept(score_diff)) {
                     current_score += score_diff;
                 }
                 else {
@@ -446,23 +494,20 @@ struct RowAssignment {
                     int row = mt() % nrow;
                     rows.insert(row);
                 }
-                auto saved_assignments = _assignments;
-                auto saved_sizes = _assigned_sizes;
-                auto saved_n_col = _n_col;
-                int score_diff = greedy_rearrange(std::vector(rows.begin(), rows.end()));
+                int score_diff = greedy_rearrange_score(std::vector(rows.begin(), rows.end()));
                 if (score_diff > 0) {
                     current_score += score_diff;
-                }
-                else {
-                    _assignments = saved_assignments;
-                    _assigned_sizes = saved_sizes;
-                    _n_col = saved_n_col;
+                    greedy_rearrange(std::vector(rows.begin(), rows.end()));
+                    /* assert(d == score_diff); */
                 }
             }
         }
         std::cerr << "--------------------------" << std::endl;
         std::cerr << "Day " << _day << " best_score: " << best_score << std::endl;
+        std::cerr << "iter: " << iter << std::endl;
         *this = best_assignment;
+        /* iter_sum += iter; */
+        /* std::cerr << "iter_sum: " << iter_sum << std::endl; */
     }
     auto get_row_assignments() const {
         std::vector<std::vector<int>> id_list(nrow);
@@ -484,12 +529,12 @@ struct RowAssignment {
             auto a2 = adjust_vert_partition(a[i], b[i]);
             int sum = 0;
             for (int j = 0; j < a2.size(); j++) {
-                if (a2[j] != a[i][j]) {
-                std::cerr << "(Day " << std::setw(2) << _day << ") "
-                        << std::setw(2) << i << " th row: "
-                        << "pad " << std::setw(2) << j << "th col "
-                        << a[i][j] << " -> " << a2[j] << std::endl;
-                }
+                /* if (a2[j] != a[i][j]) { */
+                /*     std::cerr << "(Day " << std::setw(2) << _day << ") " */
+                /*             << std::setw(2) << i << " th row: " */
+                /*             << "pad " << std::setw(2) << j << "th col " */
+                /*             << a[i][j] << " -> " << a2[j] << std::endl; */
+                /* } */
                 _assignments[id[i][j]] = std::make_pair(h*a2[j], i);
                 sum += h*a2[j];
             }
