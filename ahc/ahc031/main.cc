@@ -158,6 +158,10 @@ auto find_matching(int d1, int d2) {
 }
 
 auto adjust_vert_partition(const std::vector<int>& a, const std::vector<int>& b) {
+    if (b.size() == 0) {
+        return a;
+    }
+
     const long m = a.size();
     std::vector<int> p1(m + 1), p2(b.size());
     for (int i = 0; i < m; i++) {
