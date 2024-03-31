@@ -522,8 +522,16 @@ Solution solve() {
         ras.push_back(ra);
     }
 
-    for (int d = 0; d < problem.d - 1; d++) {
-        ras[d].adjust_vert(ras[d+1]);
+    int n_adjust = 5;
+    for (int i = 0; i < n_adjust; i++) {
+        // forward
+        for (int d = 0; d < problem.d - 1; d++) {
+            ras[d].adjust_vert(ras[d+1]);
+        }
+        // backward
+        for (int d = problem.d - 1; d > 0; d--) {
+            ras[d].adjust_vert(ras[d-1]);
+        }
     }
 
     std::vector<Arrangement> arr;
