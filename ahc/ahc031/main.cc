@@ -223,7 +223,7 @@ struct RowAssignment {
         }
         int n_partition = std::max(0, _n_col[row] - 1);
         int l = get_height(row);
-        penalty += l*n_partition;
+        penalty += 2*l*n_partition;
         return penalty;
     }
     int calc_penalty() {
