@@ -122,41 +122,6 @@ int calc_score(const Solution& sol) {
     return score;
 }
 
-struct Matching {
-    int cost;
-    int value;
-    std::vector<int> indices;
-};
-
-int find_nearest(const std::vector<int>& v, int x) {
-    auto cost = [&](int y) {
-        return std::abs(y - x);
-    };
-    auto it = std::lower_bound(v.begin(), v.end(), x);
-    auto it2 = (it != v.begin()) ? std::prev(it) : v.begin();
-    if (it == v.end()) it = std::prev(it);
-    it = (cost(*it) < cost(*it2)) ? it : it2;
-    return std::distance(v.begin(), it);
-}
-
-auto find_matching(int d1, int d2) {
-    std::vector<Matching> ms;
-    for (int k = 0; k < problem.n; k++) {
-        const auto& a1 = problem.a[d1];
-        const auto& a2 = problem.a[d2];
-        int v1 = a1[k];
-        int k2 = find_nearest(a2, v1);
-        int v2 = a2[k2];
-        Matching m {
-            .cost = std::abs(v2 - v1), .value = std::max(v1, v2),
-            .indices = std::vector<int>{k, k2},
-        };
-        ms.push_back(std::move(m));
-    }
-    std::sort(ms.begin(), ms.end(), [](const Matching& lhs, const Matching& rhs) { return lhs.cost < rhs.cost; });
-    return ms;
-}
-
 auto adjust_vert_partition(const std::vector<int>& a, const std::vector<int>& b) {
     if (b.size() == 0) {
         return a;
