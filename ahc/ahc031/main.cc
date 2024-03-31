@@ -1,4 +1,5 @@
 #include <iostream>
+#include <iomanip>
 #include <vector>
 #include <algorithm>
 #include <set>
@@ -154,6 +155,43 @@ auto find_matching(int d1, int d2) {
     }
     std::sort(ms.begin(), ms.end(), [](const Matching& lhs, const Matching& rhs) { return lhs.cost < rhs.cost; });
     return ms;
+}
+
+auto adjust_vert_partition(const std::vector<int>& a, const std::vector<int>& b) {
+    const long m = a.size();
+    std::vector<int> p1(m + 1), p2(b.size());
+    for (int i = 0; i < m; i++) {
+        p1[i+1] = p1[i] + a[i];
+    }
+    for (int i = 0; i < b.size() - 1; i++) {
+        p2[i+1] = p2[i] + b[i];
+    }
+
+    int free = problem.w - p1[m];
+    int pad_sum = 0;
+    std::vector<int> paddings(m);
+    int i = 1;
+    // 左から順に partition 揃えられる限り padding を消費
+    while (i < m) {
+        auto it = std::lower_bound(p2.begin(), p2.end(), p1[i] + pad_sum);
+        if (it == p2.end()) break;
+        int pos = *it;
+        while (i < m && p1[i+1] + pad_sum < pos) i++;
+        int pad = pos - p1[i] - pad_sum;
+        assert(pad >= 0);
+        if (pad <= free) {
+            paddings[i-1] = pad;
+            free -= pad;
+            pad_sum += pad;
+        }
+        i++;
+    }
+
+    std::vector<int> res = a;
+    for (int i = 0; i < m-1; i++) {
+        res[i] += paddings[i];
+    }
+    return res;
 }
 
 struct RowAssignment {
@@ -443,6 +481,38 @@ struct RowAssignment {
         }
         *this = best_assignment;
     }
+    auto get_row_assignments() const {
+        std::vector<std::vector<int>> id_list(nrow);
+        std::vector<std::vector<int>> ws(nrow);
+        for (int k = 0; k < problem.n; k++) {
+            auto [s, row] = _assignments[k];
+            int h = get_height(row);
+            int w = (s + h - 1) / h;
+            id_list[row].push_back(k);
+            ws[row].push_back(w);
+        }
+        return std::make_pair(id_list, ws);
+    }
+    void adjust_vert(const RowAssignment& to) {
+        auto [id, a] = get_row_assignments();
+        auto [_, b] = to.get_row_assignments();
+        for (int i = 0; i < nrow; i++) {
+            int h = get_height(i);
+            auto a2 = adjust_vert_partition(a[i], b[i]);
+            int sum = 0;
+            for (int j = 0; j < a2.size(); j++) {
+                if (a2[j] != a[i][j]) {
+                std::cerr << "(Day " << std::setw(2) << _day << ") "
+                        << std::setw(2) << i << " th row: "
+                        << "pad " << std::setw(2) << j << "th col "
+                        << a[i][j] << " -> " << a2[j] << std::endl;
+                }
+                _assignments[id[i][j]] = std::make_pair(h*a2[j], i);
+                sum += h*a2[j];
+            }
+            _assigned_sizes[i] = sum;
+        }
+    }
     Arrangement to_arrangement() const {
         std::vector<Rectangle> arrangement(problem.n);
         std::vector<int> last_section(nrow);
@@ -481,6 +551,10 @@ Solution solve() {
         RowAssignment ra(d);
         ra.climb();
         ras.push_back(ra);
+    }
+
+    for (int d = 0; d < problem.d - 1; d++) {
+        ras[d].adjust_vert(ras[d+1]);
     }
 
     std::vector<Arrangement> arr;
