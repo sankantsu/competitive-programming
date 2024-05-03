@@ -1,3 +1,7 @@
 **/a.out
 **/*.dSYM
 **/testcases/
+
+# clang
+compile_commands.json
+**/.cache/
