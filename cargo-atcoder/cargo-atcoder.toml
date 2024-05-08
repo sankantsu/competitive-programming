@@ -1,0 +1,33 @@
+[atcoder]
+submit_via_binary = false # submit via binary by default
+use_cross = false         # use `cross` instead of `cargo` when generating binaries
+binary_column = 80        # maximum column number of generated binary (0 for no wrapping)
+update_interval = 1000    # interval time of fetching result (ms)
+strip_path = "strip"      # specify `strip` command path. NOTE: if you use macOS, you have to install GNU strip and specify its path here.
+
+[profile]
+# target to use to generate binary
+target = "aarch64-apple-darwin"
+
+[profile.release]
+lto = true
+panic = 'abort'
+
+# dependencies added to new project
+[dependencies]
+proconio = "*"
+ac-library-rs = "*"
+
+[project]
+# to create `rust-toolchain` file, uncomment this line.
+# rustc_version = "1.15.1"
+
+# source code template
+template = """
+use proconio::input;
+
+fn main() {
+    input! {
+    }
+}
+"""
