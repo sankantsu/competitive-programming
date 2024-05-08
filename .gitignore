@@ -5,3 +5,6 @@
 # clang
 compile_commands.json
 **/.cache/
+
+# rust
+**/target/
