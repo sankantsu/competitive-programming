@@ -1,0 +1,13 @@
+[package]
+name = "abc330"
+version = "0.1.0"
+edition = "2021"
+
+# dependencies added to new project
+[dependencies]
+proconio = "*"
+ac-library-rs = "*"
+
+[profile.release]
+lto = true
+panic = 'abort'
