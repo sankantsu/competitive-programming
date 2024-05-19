@@ -266,7 +266,7 @@ impl State {
     fn search_free_space(&self) -> (usize, usize) {
         let n = self.len();
         for i in 0..n {
-            for j in 0..n - 1 {
+            for j in 1..n - 1 {
                 if self.board[i][j] == -1 {
                     return (i, j);
                 }
@@ -324,23 +324,14 @@ impl Solver {
     fn new(input: Input) -> Self {
         Self { input }
     }
-    fn initial_moves(&self) -> Vec<Vec<Move>> {
+    fn initial_moves(&self, n_crane: usize) -> Vec<Vec<Move>> {
         let n = self.input.n;
         let mut actions = vec![];
-        for i in 0..n-2 {
-            actions.push(vec![Move::Pick; n]);
-            for _ in 0..n-2-i {
-                actions.push(vec![Move::from_char('R'); n]);
-            }
-            actions.push(vec![Move::Release; n]);
-            for _ in 0..n-2-i {
-                actions.push(vec![Move::from_char('L'); n]);
-            }
-        }
         let mut bomb = vec![Move::Bomb; n];
-        bomb[0] = Move::Stay;
+        for i in 0..n_crane {
+            bomb[i] = Move::Stay;
+        }
         actions.push(bomb);
-
         actions
     }
     fn solve(&self) -> Solution {
@@ -349,32 +340,68 @@ impl Solver {
         let mut cnt = vec![0; n];
         let mut state = State::new(&self.input);
 
-        actions.append(&mut self.initial_moves());
+        let n_crane = 1;
+        actions.append(&mut self.initial_moves(n_crane));
         state.execute(&actions).unwrap();
 
+        let mut hold = vec![-1; n_crane];
         while !state.done.iter().map(|v| v.len()).all(|x| x == n) {
-            let cand = cnt.iter().enumerate().map(|(i, x)| n * i + x).collect_vec();
-            let mut pos = cand.iter().map(|id| state.search(*id as u32)).collect_vec();
-            pos.sort();
-
+            if actions.len() > 1000 {
+                break;
+            }
             let mut act = vec![];
-            let x = state.cranes[0].x;
-            let y = state.cranes[0].y;
-            let (k, i, j) = pos[0];
-            if k == 0 {
-                let dest = state.board[i][j] as usize / n;
-                act.append(&mut gen_move((x, y), (i, j)));
-                act.push(Move::Pick);
-                act.append(&mut gen_move((i, j), (dest, n - 1)));
-                act.push(Move::Release);
-                cnt[dest] += 1;
-            } else if k == 2 {
-                let i = j;
-                let (tx, ty) = state.search_free_space();
-                act.append(&mut gen_move((x, y), (i, 0)));
-                act.push(Move::Pick);
-                act.append(&mut gen_move((i, 0), (tx, ty)));
-                act.push(Move::Release);
+            for i in 0..n_crane {
+                let cand = cnt.iter().enumerate().map(|(i, x)| n * i + x).collect_vec();
+                let x = state.cranes[i].x as i32;
+                let y = state.cranes[i].y as i32;
+                let dest;
+                let di; let dj;
+                if hold[i] != -1 {
+                    if cand.contains(&(hold[i] as usize)) {
+                        dest = (hold[i] / n as i32, (n - 1) as i32);
+                    } else {
+                        let (i, j) = state.search_free_space();
+                        dest = (i as i32, j as i32);
+                    }
+                    di = dest.0 - x;
+                    dj = dest.1 - y;
+                }
+                else {
+                    let mut pos = cand.iter().map(|id| state.search(*id as u32)).collect_vec();
+                    pos.sort();
+                    let (k, i, j) = pos[0];
+
+                    if k == 0 {
+                        dest = (i as i32, j as i32);
+                        di = dest.0 - x;
+                        dj = dest.1 - y;
+                    } else if k == 2 {
+                        let i = j;
+                        dest = (i as i32, 0);
+                        di = dest.0 - x;
+                        dj = dest.1 - y;
+                    } else {
+                        panic!("Container is already holded by another crane!");
+                    }
+                }
+                if di == 0 && dj == 0 {
+                    if hold[i] == -1 {
+                        act.push(Move::Pick);
+                        hold[i] = state.board[x as usize][y as usize] as i32;
+                    } else {
+                        act.push(Move::Release);
+                        if dest.1 as usize == n - 1 {
+                            cnt[dest.0 as usize] += 1;
+                        }
+                        hold[i] = -1;
+                    }
+                } else if di != 0 {
+                    let mv = if di > 0 { Move::from_char('D') } else { Move::from_char('U') };
+                    act.push(mv);
+                } else {
+                    let mv = if dj > 0 { Move::from_char('R') } else { Move::from_char('L') };
+                    act.push(mv);
+                }
             }
             let mut ext_act = extend_moves(&act, n);
             state.execute(&ext_act).unwrap();
