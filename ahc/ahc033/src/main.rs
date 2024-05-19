@@ -313,7 +313,7 @@ impl State {
                     let ny = y as i32 + dy[dir1];
                     if out_of_range(nx, ny) { continue; }
                     if !move_over && self.board[nx as usize][ny as usize] != -1 { continue; }
-                    if dist[x as usize][y as usize] < d { continue; }
+                    if dist[nx as usize][ny as usize] < d { continue; }
                     queue.push_back((nx, ny, d + 1));
                     dist[nx as usize][ny as usize] = d + 1;
                 }
