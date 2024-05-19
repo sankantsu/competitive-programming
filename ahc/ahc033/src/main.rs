@@ -1,5 +1,6 @@
 use itertools::Itertools;
 use std::iter;
+use std::collections::VecDeque;
 
 struct Input {
     n: usize,
@@ -16,7 +17,7 @@ impl Input {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 enum Move {
     Stay,
     Pick,
@@ -246,13 +247,13 @@ impl State {
                 }
             }
         }
-        for crane in &self.cranes {
-            if crane.container == container as i32 {
-                let x = crane.x;
-                let y = crane.y;
-                return (1, x, y);
-            }
-        }
+        //for crane in &self.cranes {
+        //    if crane.container == container as i32 {
+        //        let x = crane.x;
+        //        let y = crane.y;
+        //        return (1, x, y);
+        //    }
+        //}
         for i in 0..n {
             let k = self.queue[i].len();
             for j in 0..k {
@@ -266,13 +267,59 @@ impl State {
     fn search_free_space(&self) -> (usize, usize) {
         let n = self.len();
         for i in 0..n {
-            for j in 1..n - 1 {
+            for j in (2..n - 1).rev() {
                 if self.board[i][j] == -1 {
                     return (i, j);
                 }
             }
         }
         (!0, !0)
+    }
+    // search shortest path and returns (all possible) first move if possible
+    fn bfs(&self, from: (usize, usize), to: (usize, usize), move_over: bool) -> Vec<Move> {
+        let dx = [-1, 0, 1, 0];
+        let dy = [0, -1, 0, 1];
+        let n = self.len();
+        let (sx, sy) = from;
+        let (tx, ty) = to;
+        let out_of_range = |x, y| {
+            x < 0 || n as i32 <= x || y < 0 || n as i32 <= y
+        };
+        let mut mv = vec![];
+        let mut min_dist = 1usize<<60;
+        for dir in 0..4 {
+            let mut dist = vec![vec![1usize<<60; n]; n];
+            let sx1 = sx as i32 + dx[dir];
+            let sy1 = sy as i32 + dy[dir];
+            if out_of_range(sx1, sy1) { continue; }
+            if !move_over && self.board[sx1 as usize][sy1 as usize] != -1 { continue; }
+            let mut queue = VecDeque::new();
+            queue.push_back((sx1, sy1, 1));
+            dist[sx][sy] = 0;
+            dist[sx1 as usize][sy1 as usize] = 1;
+            while !queue.is_empty() {
+                let (x, y, d) = queue.pop_front().unwrap();
+                if x == tx as i32 && y == ty as i32 {
+                    if d < min_dist {
+                        min_dist = d;
+                        mv = vec![Move::Move(dir)];
+                    } else if d == min_dist {
+                        mv.push(Move::Move(dir));
+                    }
+                    break;
+                }
+                for dir1 in 0..4 {
+                    let nx = x as i32 + dx[dir1];
+                    let ny = y as i32 + dy[dir1];
+                    if out_of_range(nx, ny) { continue; }
+                    if !move_over && self.board[nx as usize][ny as usize] != -1 { continue; }
+                    if dist[x as usize][y as usize] < d { continue; }
+                    queue.push_back((nx, ny, d + 1));
+                    dist[nx as usize][ny as usize] = d + 1;
+                }
+            }
+        }
+        mv
     }
 }
 
@@ -289,31 +336,12 @@ impl Solution {
     }
 }
 
-fn gen_move(p: (usize, usize), q: (usize, usize)) -> Vec<Move> {
-    let di = q.0 as i32 - p.0 as i32;
-    let dj = q.1 as i32 - p.1 as i32;
-    let mut moves = vec![];
-    if di > 0 {
-        moves.append(&mut iter::repeat('D').take(di as usize).collect_vec());
-    } else {
-        moves.append(&mut iter::repeat('U').take(-di as usize).collect_vec());
+fn extend_move(moves: &Vec<Move>, n: usize) -> Vec<Move> {
+    let mut ext = moves.clone();
+    while ext.len() < n {
+        ext.push(Move::Stay);
     }
-    if dj > 0 {
-        moves.append(&mut iter::repeat('R').take(dj as usize).collect_vec());
-    } else {
-        moves.append(&mut iter::repeat('L').take(-dj as usize).collect_vec());
-    }
-    moves.iter().map(|c| Move::from_char(*c)).collect_vec()
-}
-
-fn extend_moves(moves: &Vec<Move>, n: usize) -> Vec<Vec<Move>> {
-    let mut ext_moves = vec![];
-    for mv in moves {
-        let mut ext = vec![Move::Stay; n];
-        ext[0] = mv.clone();
-        ext_moves.push(ext);
-    }
-    ext_moves
+    ext
 }
 
 struct Solver {
@@ -340,72 +368,127 @@ impl Solver {
         let mut cnt = vec![0; n];
         let mut state = State::new(&self.input);
 
-        let n_crane = 1;
+        let mut n_crane = 2;
         actions.append(&mut self.initial_moves(n_crane));
         state.execute(&actions).unwrap();
 
-        let mut hold = vec![-1; n_crane];
         while !state.done.iter().map(|v| v.len()).all(|x| x == n) {
-            if actions.len() > 1000 {
+            if actions.len() > 300 {
                 break;
             }
+            let cand = cnt.iter().enumerate().map(|(i, x)| n * i + x).collect_vec();
+            let mut pos = cand.iter().map(|id| state.search(*id as u32)).collect_vec();
+            pos = pos.into_iter().filter(|(k,_,_)| *k != 1).collect();
+            pos.sort();
+            let mut target = 0;
             let mut act = vec![];
+            let mut next = vec![];
             for i in 0..n_crane {
-                let cand = cnt.iter().enumerate().map(|(i, x)| n * i + x).collect_vec();
                 let x = state.cranes[i].x as i32;
                 let y = state.cranes[i].y as i32;
+                let large = state.cranes[i].large;
                 let dest;
-                let di; let dj;
-                if hold[i] != -1 {
-                    if cand.contains(&(hold[i] as usize)) {
-                        dest = (hold[i] / n as i32, (n - 1) as i32);
+                if state.cranes[i].container != -1 {
+                    if cand.contains(&(state.cranes[i].container as usize)) {
+                        dest = (state.cranes[i].container / n as i32, (n - 1) as i32);
                     } else {
                         let (i, j) = state.search_free_space();
                         dest = (i as i32, j as i32);
                     }
-                    di = dest.0 - x;
-                    dj = dest.1 - y;
                 }
                 else {
-                    let mut pos = cand.iter().map(|id| state.search(*id as u32)).collect_vec();
-                    pos.sort();
-                    let (k, i, j) = pos[0];
-
+                    let (k, i, j) = pos[target];
+                    target += 1;
                     if k == 0 {
                         dest = (i as i32, j as i32);
-                        di = dest.0 - x;
-                        dj = dest.1 - y;
                     } else if k == 2 {
                         let i = j;
                         dest = (i as i32, 0);
-                        di = dest.0 - x;
-                        dj = dest.1 - y;
-                    } else {
-                        panic!("Container is already holded by another crane!");
+                    }
+                    else {
+                        dest = (-1, -1);
+                        eprintln!("Container is already holded by another crane!");
                     }
                 }
-                if di == 0 && dj == 0 {
-                    if hold[i] == -1 {
-                        act.push(Move::Pick);
-                        hold[i] = state.board[x as usize][y as usize] as i32;
+                let mut nx = x;
+                let mut ny = y;
+                let mut mv = None;
+                dbg!(i, dest);
+                if dest == (-1, -1) {
+                    mv = Some(Move::Bomb);
+                    n_crane -= 1;
+                }
+                else if (x,y) == dest {
+                    nx = x;
+                    ny = y;
+                    if state.cranes[i].container == -1 {
+                        mv = Some(Move::Pick);
                     } else {
-                        act.push(Move::Release);
+                        mv = Some(Move::Release);
                         if dest.1 as usize == n - 1 {
                             cnt[dest.0 as usize] += 1;
                         }
-                        hold[i] = -1;
                     }
-                } else if di != 0 {
-                    let mv = if di > 0 { Move::from_char('D') } else { Move::from_char('U') };
-                    act.push(mv);
                 } else {
-                    let mv = if dj > 0 { Move::from_char('R') } else { Move::from_char('L') };
-                    act.push(mv);
+                    let (tx, ty) = dest;
+                    let mv_cand = state.bfs(
+                            (x as usize, y as usize),
+                            (tx as usize, ty as usize),
+                            large || state.cranes[i].container == -1
+                        );
+                    let ok = |nx, ny| {
+                        if !large && state.cranes[i].container != -1 && state.board[nx as usize][ny as usize] != -1 {
+                            return false
+                        }
+                        for i in 0..next.len() {
+                            let p1 = (state.cranes[i].x as i32, state.cranes[i].y as i32);
+                            let p2 = (x, y);
+                            let q1 = next[i];
+                            let q2 = (nx, ny);
+                            dbg!(p1, p2, q1, q2);
+                            if q1 == q2 {
+                                return false
+                            }
+                            if q1 == p2 && q2 == p1 {
+                                return false
+                            }
+                        }
+                        true
+                    };
+                    for mv1 in &mv_cand {
+                        let (nx1, ny1) = mv1.next((x as usize, y as usize), n).unwrap();
+                        if ok(nx1 as i32, ny1 as i32) {
+                            nx = nx1 as i32; ny = ny1 as i32;
+                            mv = Some(mv1.clone());
+                        }
+                    }
+                    if mv.is_none() {
+                        if next.iter().all(|(px,py)| (*px,*py) != (x,y)) {
+                            mv = Some(Move::Stay);
+                        } else {
+                            for dir in 0..4 {
+                                let mv1 = Move::Move(dir);
+                                if let Some((nx1, ny1)) = mv1.next((x as usize, y as usize), n) {
+                                    if ok(nx1 as i32, ny1 as i32) {
+                                        nx = nx1 as i32; ny = ny1 as i32;
+                                        mv = Some(mv1);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if mv.is_none() {
+                        panic!("Cannot move to any direction!");
+                    }
                 }
+                act.push(mv.unwrap());
+                next.push((nx, ny));
             }
-            let mut ext_act = extend_moves(&act, n);
-            state.execute(&ext_act).unwrap();
-            actions.append(&mut ext_act);
+            let ext_act = extend_move(&act, n);
+            dbg!(&ext_act);
+            state.step(&ext_act).unwrap();
+            actions.push(ext_act);
         }
         actions = (0..actions[0].len())
             .map(|i| actions.iter().map(|inner| inner[i].clone()).collect_vec())
