@@ -1,5 +1,4 @@
 use itertools::Itertools;
-use std::iter;
 use std::collections::VecDeque;
 
 struct Input {
@@ -27,6 +26,7 @@ enum Move {
 }
 
 impl Move {
+    #[allow(unused)]
     fn from_char(c: char) -> Self {
         match c {
             '.' => Self::Stay,
@@ -368,12 +368,14 @@ impl Solver {
         let mut cnt = vec![0; n];
         let mut state = State::new(&self.input);
 
-        let mut n_crane = 2;
+        let n_crane = 2;
+        let mut bombed = vec![false; n_crane];
         actions.append(&mut self.initial_moves(n_crane));
         state.execute(&actions).unwrap();
 
+        let mut turn = 0;
         while !state.done.iter().map(|v| v.len()).all(|x| x == n) {
-            if actions.len() > 300 {
+            if actions.len() > 1000 {
                 break;
             }
             let cand = cnt.iter().enumerate().map(|(i, x)| n * i + x).collect_vec();
@@ -384,11 +386,14 @@ impl Solver {
             let mut act = vec![];
             let mut next = vec![];
             for i in 0..n_crane {
+                let mut override_next = vec![];
                 let x = state.cranes[i].x as i32;
                 let y = state.cranes[i].y as i32;
                 let large = state.cranes[i].large;
                 let dest;
-                if state.cranes[i].container != -1 {
+                if bombed[i] {
+                    dest = (-1, -1);
+                } else if state.cranes[i].container != -1 {
                     if cand.contains(&(state.cranes[i].container as usize)) {
                         dest = (state.cranes[i].container / n as i32, (n - 1) as i32);
                     } else {
@@ -410,20 +415,48 @@ impl Solver {
                         eprintln!("Container is already holded by another crane!");
                     }
                 }
+                let ok = |nx, ny| {
+                    if !large && state.cranes[i].container != -1 && state.board[nx as usize][ny as usize] != -1 {
+                        return false
+                    }
+                    for i in 0..next.len() {
+                        let p1 = (state.cranes[i].x as i32, state.cranes[i].y as i32);
+                        let p2 = (x, y);
+                        let q1 = next[i];
+                        let q2 = (nx, ny);
+                        if q1 == q2 {
+                            return false
+                        }
+                        if q1 == p2 && q2 == p1 {
+                            return false
+                        }
+                    }
+                    true
+                };
                 let mut nx = x;
                 let mut ny = y;
                 let mut mv = None;
-                dbg!(i, dest);
                 if dest == (-1, -1) {
-                    mv = Some(Move::Bomb);
-                    n_crane -= 1;
+                    if !bombed[i] {
+                        bombed[i] = true;
+                        mv = Some(Move::Bomb);
+                    } else {
+                        mv = Some(Move::Stay);
+                    }
                 }
                 else if (x,y) == dest {
-                    nx = x;
-                    ny = y;
-                    if state.cranes[i].container == -1 {
+                    if state.cranes[i].container == -1 && ok(x, y) {
+                        nx = x;
+                        ny = y;
                         mv = Some(Move::Pick);
-                    } else {
+                    } else if state.cranes[i].container != -1 && ok(x, y) {
+                        for j in 0..i {
+                            // cancel previous move
+                            if next[j] == (x, y) {
+                                override_next.push((j, (state.cranes[j].x as i32, state.cranes[j].y as i32)));
+                                act[j] = Move::Stay;
+                            }
+                        }
                         mv = Some(Move::Release);
                         if dest.1 as usize == n - 1 {
                             cnt[dest.0 as usize] += 1;
@@ -436,25 +469,6 @@ impl Solver {
                             (tx as usize, ty as usize),
                             large || state.cranes[i].container == -1
                         );
-                    let ok = |nx, ny| {
-                        if !large && state.cranes[i].container != -1 && state.board[nx as usize][ny as usize] != -1 {
-                            return false
-                        }
-                        for i in 0..next.len() {
-                            let p1 = (state.cranes[i].x as i32, state.cranes[i].y as i32);
-                            let p2 = (x, y);
-                            let q1 = next[i];
-                            let q2 = (nx, ny);
-                            dbg!(p1, p2, q1, q2);
-                            if q1 == q2 {
-                                return false
-                            }
-                            if q1 == p2 && q2 == p1 {
-                                return false
-                            }
-                        }
-                        true
-                    };
                     for mv1 in &mv_cand {
                         let (nx1, ny1) = mv1.next((x as usize, y as usize), n).unwrap();
                         if ok(nx1 as i32, ny1 as i32) {
@@ -462,33 +476,48 @@ impl Solver {
                             mv = Some(mv1.clone());
                         }
                     }
-                    if mv.is_none() {
-                        if next.iter().all(|(px,py)| (*px,*py) != (x,y)) {
-                            mv = Some(Move::Stay);
-                        } else {
-                            for dir in 0..4 {
-                                let mv1 = Move::Move(dir);
-                                if let Some((nx1, ny1)) = mv1.next((x as usize, y as usize), n) {
-                                    if ok(nx1 as i32, ny1 as i32) {
-                                        nx = nx1 as i32; ny = ny1 as i32;
-                                        mv = Some(mv1);
-                                        break;
-                                    }
+                }
+                if mv.is_none() {
+                    if next.iter().all(|(px,py)| (*px,*py) != (x,y)) {
+                        mv = Some(Move::Stay);
+                    } else {
+                        for dir in 0..4 {
+                            let mv1 = Move::Move(dir);
+                            if let Some((nx1, ny1)) = mv1.next((x as usize, y as usize), n) {
+                                if ok(nx1 as i32, ny1 as i32) {
+                                    nx = nx1 as i32; ny = ny1 as i32;
+                                    mv = Some(mv1);
+                                    break;
                                 }
                             }
                         }
                     }
-                    if mv.is_none() {
-                        panic!("Cannot move to any direction!");
+                }
+                if mv.is_none() {
+                    for j in 0..i {
+                        // cancel previous move
+                        if next[j] == (x, y) {
+                            next[j] = (state.cranes[j].x as i32, state.cranes[j].y as i32);
+                            act[j] = Move::Stay;
+                        }
                     }
+                    if state.cranes[i].container != -1 {
+                        mv = Some(Move::Release);
+                    } else {
+                        panic!("Unknown situation! debug me.");
+                    }
+                }
+                for (j, (x, y)) in override_next.into_iter() {
+                    next[j] = (x, y);
                 }
                 act.push(mv.unwrap());
                 next.push((nx, ny));
             }
             let ext_act = extend_move(&act, n);
-            dbg!(&ext_act);
+            eprintln!("turn: {}: {}", turn, ext_act.iter().map(|mv| mv.to_char()).collect::<String>());
             state.step(&ext_act).unwrap();
             actions.push(ext_act);
+            turn += 1;
         }
         actions = (0..actions[0].len())
             .map(|i| actions.iter().map(|inner| inner[i].clone()).collect_vec())
