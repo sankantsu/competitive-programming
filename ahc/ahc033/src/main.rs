@@ -449,7 +449,7 @@ impl Solver {
                         nx = x;
                         ny = y;
                         mv = Some(Move::Pick);
-                    } else if state.cranes[i].container != -1 && ok(x, y) {
+                    } else if state.cranes[i].container != -1 {
                         for j in 0..i {
                             // cancel previous move
                             if next[j] == (x, y) {
@@ -481,7 +481,9 @@ impl Solver {
                     if next.iter().all(|(px,py)| (*px,*py) != (x,y)) {
                         mv = Some(Move::Stay);
                     } else {
-                        for dir in 0..4 {
+                        // prefer evacuate to left rather than up.
+                        // it sometimes prevent small crane stucks at wrong destination.
+                        for dir in [1, 3, 2, 0] {
                             let mv1 = Move::Move(dir);
                             if let Some((nx1, ny1)) = mv1.next((x as usize, y as usize), n) {
                                 if ok(nx1 as i32, ny1 as i32) {
@@ -502,6 +504,9 @@ impl Solver {
                         }
                     }
                     if state.cranes[i].container != -1 {
+                        if y == (n - 1) as i32 {
+                            panic!("You cannot release container at a wrong destination.");
+                        }
                         mv = Some(Move::Release);
                     } else {
                         panic!("Unknown situation! debug me.");
