@@ -158,6 +158,7 @@ impl State {
         for i in 0..self.len() {
             let x = self.cranes[i].x;
             let y = self.cranes[i].y;
+            let c = self.cranes[i].container;
             let large = self.cranes[i].large;
             match mv[i] {
                 Move::Stay => (),
@@ -193,7 +194,7 @@ impl State {
                     }
                     let nxy = mv[i].next((x, y), n);
                     if let Some((nx, ny)) = nxy {
-                        if !large && self.board[nx][ny] != -1 {
+                        if !large && c != -1 && self.board[nx][ny] != -1 {
                             return Err(format!("Crane {i} cannot move over a container."));
                         }
                         next.cranes[i].x = nx;
@@ -288,10 +289,6 @@ impl Solution {
     }
 }
 
-struct Solver {
-    input: Input,
-}
-
 fn gen_move(p: (usize, usize), q: (usize, usize)) -> Vec<Move> {
     let di = q.0 as i32 - p.0 as i32;
     let dj = q.1 as i32 - p.1 as i32;
@@ -319,19 +316,42 @@ fn extend_moves(moves: &Vec<Move>, n: usize) -> Vec<Vec<Move>> {
     ext_moves
 }
 
+struct Solver {
+    input: Input,
+}
+
 impl Solver {
     fn new(input: Input) -> Self {
         Self { input }
+    }
+    fn initial_moves(&self) -> Vec<Vec<Move>> {
+        let n = self.input.n;
+        let mut actions = vec![];
+        for i in 0..n-2 {
+            actions.push(vec![Move::Pick; n]);
+            for _ in 0..n-2-i {
+                actions.push(vec![Move::from_char('R'); n]);
+            }
+            actions.push(vec![Move::Release; n]);
+            for _ in 0..n-2-i {
+                actions.push(vec![Move::from_char('L'); n]);
+            }
+        }
+        let mut bomb = vec![Move::Bomb; n];
+        bomb[0] = Move::Stay;
+        actions.push(bomb);
+
+        actions
     }
     fn solve(&self) -> Solution {
         let n = self.input.n;
         let mut actions = vec![];
         let mut cnt = vec![0; n];
         let mut state = State::new(&self.input);
-        let mut act = vec![Move::Bomb; n];
-        act[0] = Move::Stay;
-        state.step(&act).unwrap();
-        actions.push(act);
+
+        actions.append(&mut self.initial_moves());
+        state.execute(&actions).unwrap();
+
         while !state.done.iter().map(|v| v.len()).all(|x| x == n) {
             let cand = cnt.iter().enumerate().map(|(i, x)| n * i + x).collect_vec();
             let mut pos = cand.iter().map(|id| state.search(*id as u32)).collect_vec();
