@@ -1,1 +1,6 @@
 tools/
+
+# local test input/output
+in/
+out/
+log/
