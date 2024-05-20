@@ -59,14 +59,14 @@ impl Move {
             Self::Stay | Self::Pick | Self::Release => (x, y),
             Self::Bomb => (!0, !0),
             Self::Move(dir) => {
-                let dx = [-1, 0, 1, 0];
-                let dy = [0, -1, 0, 1];
-                let nx = x as i32 + dx[*dir];
-                let ny = y as i32 + dy[*dir];
-                if nx < 0 || n as i32 <= nx || ny < 0 || n as i32 <= ny {
+                let dx = [!0, 0, 1, 0];
+                let dy = [0, !0, 0, 1];
+                let nx = usize::wrapping_add(x, dx[*dir]);
+                let ny = usize::wrapping_add(y, dy[*dir]);
+                if !(0..n).contains(&nx) || !(0..n).contains(&ny) {
                     return None;
                 }
-                (nx as usize, ny as usize)
+                (nx, ny)
             }
         };
         Some(nxy)
@@ -277,29 +277,29 @@ impl State {
     }
     // search shortest path and returns (all possible) first move if possible
     fn bfs(&self, from: (usize, usize), to: (usize, usize), move_over: bool) -> Vec<Move> {
-        let dx = [-1, 0, 1, 0];
-        let dy = [0, -1, 0, 1];
+        let dx = [!0, 0, 1, 0];
+        let dy = [0, !0, 0, 1];
         let n = self.len();
         let (sx, sy) = from;
         let (tx, ty) = to;
-        let out_of_range = |x, y| {
-            x < 0 || n as i32 <= x || y < 0 || n as i32 <= y
+        let out_of_range = |x: usize, y: usize| {
+            !(0..n).contains(&x) || !(0..n).contains(&y)
         };
         let mut mv = vec![];
         let mut min_dist = 1usize<<60;
         for dir in 0..4 {
             let mut dist = vec![vec![1usize<<60; n]; n];
-            let sx1 = sx as i32 + dx[dir];
-            let sy1 = sy as i32 + dy[dir];
+            let sx1 = usize::wrapping_add(sx, dx[dir]);
+            let sy1 = usize::wrapping_add(sy, dy[dir]);
             if out_of_range(sx1, sy1) { continue; }
-            if !move_over && self.board[sx1 as usize][sy1 as usize] != -1 { continue; }
+            if !move_over && self.board[sx1][sy1] != -1 { continue; }
             let mut queue = VecDeque::new();
             queue.push_back((sx1, sy1, 1));
             dist[sx][sy] = 0;
-            dist[sx1 as usize][sy1 as usize] = 1;
+            dist[sx1][sy1] = 1;
             while !queue.is_empty() {
                 let (x, y, d) = queue.pop_front().unwrap();
-                if x == tx as i32 && y == ty as i32 {
+                if x == tx && y == ty {
                     if d < min_dist {
                         min_dist = d;
                         mv = vec![Move::Move(dir)];
@@ -309,13 +309,13 @@ impl State {
                     break;
                 }
                 for dir1 in 0..4 {
-                    let nx = x as i32 + dx[dir1];
-                    let ny = y as i32 + dy[dir1];
+                    let nx = usize::wrapping_add(x, dx[dir1]);
+                    let ny = usize::wrapping_add(y, dy[dir1]);
                     if out_of_range(nx, ny) { continue; }
-                    if !move_over && self.board[nx as usize][ny as usize] != -1 { continue; }
-                    if dist[nx as usize][ny as usize] < d { continue; }
+                    if !move_over && self.board[nx][ny] != -1 { continue; }
+                    if dist[nx][ny] < d { continue; }
                     queue.push_back((nx, ny, d + 1));
-                    dist[nx as usize][ny as usize] = d + 1;
+                    dist[nx][ny] = d + 1;
                 }
             }
         }
@@ -387,40 +387,40 @@ impl Solver {
             let mut next = vec![];
             for i in 0..n_crane {
                 let mut override_next = vec![];
-                let x = state.cranes[i].x as i32;
-                let y = state.cranes[i].y as i32;
+                let x = state.cranes[i].x;
+                let y = state.cranes[i].y;
                 let large = state.cranes[i].large;
                 let dest;
                 if bombed[i] {
-                    dest = (-1, -1);
+                    dest = (!0, !0);
                 } else if state.cranes[i].container != -1 {
                     if cand.contains(&(state.cranes[i].container as usize)) {
-                        dest = (state.cranes[i].container / n as i32, (n - 1) as i32);
+                        dest = ((state.cranes[i].container / n as i32) as usize, n - 1);
                     } else {
                         let (i, j) = state.search_free_space();
-                        dest = (i as i32, j as i32);
+                        dest = (i, j);
                     }
                 }
                 else {
                     let (k, i, j) = pos[target];
                     target += 1;
                     if k == 0 {
-                        dest = (i as i32, j as i32);
+                        dest = (i, j);
                     } else if k == 2 {
                         let i = j;
-                        dest = (i as i32, 0);
+                        dest = (i, 0);
                     }
                     else {
-                        dest = (-1, -1);
+                        dest = (!0, !0);
                         eprintln!("Container is already holded by another crane!");
                     }
                 }
-                let ok = |nx, ny| {
-                    if !large && state.cranes[i].container != -1 && state.board[nx as usize][ny as usize] != -1 {
+                let ok = |nx: usize, ny: usize| {
+                    if !large && state.cranes[i].container != -1 && state.board[nx][ny] != -1 {
                         return false
                     }
                     for i in 0..next.len() {
-                        let p1 = (state.cranes[i].x as i32, state.cranes[i].y as i32);
+                        let p1 = (state.cranes[i].x, state.cranes[i].y);
                         let p2 = (x, y);
                         let q1 = next[i];
                         let q2 = (nx, ny);
@@ -436,7 +436,7 @@ impl Solver {
                 let mut nx = x;
                 let mut ny = y;
                 let mut mv = None;
-                if dest == (-1, -1) {
+                if dest == (!0, !0) {
                     if !bombed[i] {
                         bombed[i] = true;
                         mv = Some(Move::Bomb);
@@ -453,26 +453,26 @@ impl Solver {
                         for j in 0..i {
                             // cancel previous move
                             if next[j] == (x, y) {
-                                override_next.push((j, (state.cranes[j].x as i32, state.cranes[j].y as i32)));
+                                override_next.push((j, (state.cranes[j].x, state.cranes[j].y)));
                                 act[j] = Move::Stay;
                             }
                         }
                         mv = Some(Move::Release);
-                        if dest.1 as usize == n - 1 {
-                            cnt[dest.0 as usize] += 1;
+                        if dest.1 == n - 1 {
+                            cnt[dest.0] += 1;
                         }
                     }
                 } else {
                     let (tx, ty) = dest;
                     let mv_cand = state.bfs(
-                            (x as usize, y as usize),
-                            (tx as usize, ty as usize),
+                            (x, y),
+                            (tx, ty),
                             large || state.cranes[i].container == -1
                         );
                     for mv1 in &mv_cand {
-                        let (nx1, ny1) = mv1.next((x as usize, y as usize), n).unwrap();
-                        if ok(nx1 as i32, ny1 as i32) {
-                            nx = nx1 as i32; ny = ny1 as i32;
+                        let (nx1, ny1) = mv1.next((x, y), n).unwrap();
+                        if ok(nx1, ny1) {
+                            nx = nx1; ny = ny1;
                             mv = Some(mv1.clone());
                         }
                     }
@@ -485,9 +485,9 @@ impl Solver {
                         // it sometimes prevent small crane stucks at wrong destination.
                         for dir in [1, 3, 2, 0] {
                             let mv1 = Move::Move(dir);
-                            if let Some((nx1, ny1)) = mv1.next((x as usize, y as usize), n) {
-                                if ok(nx1 as i32, ny1 as i32) {
-                                    nx = nx1 as i32; ny = ny1 as i32;
+                            if let Some((nx1, ny1)) = mv1.next((x, y), n) {
+                                if ok(nx1, ny1) {
+                                    nx = nx1; ny = ny1;
                                     mv = Some(mv1);
                                     break;
                                 }
@@ -499,12 +499,12 @@ impl Solver {
                     for j in 0..i {
                         // cancel previous move
                         if next[j] == (x, y) {
-                            next[j] = (state.cranes[j].x as i32, state.cranes[j].y as i32);
+                            next[j] = (state.cranes[j].x, state.cranes[j].y);
                             act[j] = Move::Stay;
                         }
                     }
                     if state.cranes[i].container != -1 {
-                        if y == (n - 1) as i32 {
+                        if y == n - 1 {
                             panic!("You cannot release container at a wrong destination.");
                         }
                         mv = Some(Move::Release);
