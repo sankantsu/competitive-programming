@@ -85,6 +85,9 @@ impl Crane {
     fn bombed(&self) -> bool {
         self.x == !0
     }
+    fn get_pos(&self) -> (usize, usize) {
+        (self.x, self.y)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -238,6 +241,22 @@ impl State {
         self.carry_in();
         Ok(())
     }
+    fn next_containers_to_caryy_out(&self) -> Vec<i32> {
+        let n = self.len();
+        (0..n)
+            .enumerate()
+            .map(|(i, x)| {
+                if self.done[i].len() == n {
+                    -1
+                } else {
+                    (n * x + self.done[i].len()) as i32
+                }
+            })
+            .collect()
+    }
+    fn get_crane_pos(&self, i: usize) -> (usize, usize) {
+        self.cranes[i].get_pos()
+    }
     fn search(&self, container: u32) -> (usize, usize, usize) {
         let n = self.len();
         for i in 0..n {
@@ -247,13 +266,6 @@ impl State {
                 }
             }
         }
-        //for crane in &self.cranes {
-        //    if crane.container == container as i32 {
-        //        let x = crane.x;
-        //        let y = crane.y;
-        //        return (1, x, y);
-        //    }
-        //}
         for i in 0..n {
             let k = self.queue[i].len();
             for j in 0..k {
@@ -282,17 +294,19 @@ impl State {
         let n = self.len();
         let (sx, sy) = from;
         let (tx, ty) = to;
-        let out_of_range = |x: usize, y: usize| {
-            !(0..n).contains(&x) || !(0..n).contains(&y)
-        };
+        let out_of_range = |x: usize, y: usize| !(0..n).contains(&x) || !(0..n).contains(&y);
         let mut mv = vec![];
-        let mut min_dist = 1usize<<60;
+        let mut min_dist = 1usize << 60;
         for dir in 0..4 {
-            let mut dist = vec![vec![1usize<<60; n]; n];
+            let mut dist = vec![vec![1usize << 60; n]; n];
             let sx1 = usize::wrapping_add(sx, dx[dir]);
             let sy1 = usize::wrapping_add(sy, dy[dir]);
-            if out_of_range(sx1, sy1) { continue; }
-            if !move_over && self.board[sx1][sy1] != -1 { continue; }
+            if out_of_range(sx1, sy1) {
+                continue;
+            }
+            if !move_over && self.board[sx1][sy1] != -1 {
+                continue;
+            }
             let mut queue = VecDeque::new();
             queue.push_back((sx1, sy1, 1));
             dist[sx][sy] = 0;
@@ -311,15 +325,24 @@ impl State {
                 for dir1 in 0..4 {
                     let nx = usize::wrapping_add(x, dx[dir1]);
                     let ny = usize::wrapping_add(y, dy[dir1]);
-                    if out_of_range(nx, ny) { continue; }
-                    if !move_over && self.board[nx][ny] != -1 { continue; }
-                    if dist[nx][ny] < d { continue; }
+                    if out_of_range(nx, ny) {
+                        continue;
+                    }
+                    if !move_over && self.board[nx][ny] != -1 {
+                        continue;
+                    }
+                    if dist[nx][ny] < d {
+                        continue;
+                    }
                     queue.push_back((nx, ny, d + 1));
                     dist[nx][ny] = d + 1;
                 }
             }
         }
         mv
+    }
+    fn reachable(&self, from: (usize, usize), to: (usize, usize), move_over: bool) -> bool {
+        self.bfs(from, to, move_over).len() != 0
     }
 }
 
@@ -346,11 +369,13 @@ fn extend_move(moves: &Vec<Move>, n: usize) -> Vec<Move> {
 
 struct Solver {
     input: Input,
+    state: State,
 }
 
 impl Solver {
     fn new(input: Input) -> Self {
-        Self { input }
+        let state = State::new(&input);
+        Self { input, state }
     }
     fn initial_moves(&self, n_crane: usize) -> Vec<Vec<Move>> {
         let n = self.input.n;
@@ -362,165 +387,223 @@ impl Solver {
         actions.push(bomb);
         actions
     }
-    fn solve(&self) -> Solution {
+    // returns mapping of: crane id => destination
+    fn match_crane_with_target(&self, n_crane: usize) -> Vec<(usize, usize)> {
         let n = self.input.n;
-        let mut actions = vec![];
-        let mut cnt = vec![0; n];
-        let mut state = State::new(&self.input);
+        let cand = self.state.next_containers_to_caryy_out();
+        let mut pos = cand
+            .iter()
+            .map(|id| self.state.search(*id as u32))
+            .collect_vec();
+        pos.sort();
 
-        let n_crane = 2;
-        let mut bombed = vec![false; n_crane];
-        actions.append(&mut self.initial_moves(n_crane));
-        state.execute(&actions).unwrap();
-
-        let mut turn = 0;
-        while !state.done.iter().map(|v| v.len()).all(|x| x == n) {
-            if actions.len() > 1000 {
-                break;
+        let dest_of_container = |cont| {
+            if cand.contains(&cont) {
+                // this container can be carried out
+                (cont as usize / n, n - 1)
+            } else {
+                self.state.search_free_space()
             }
-            let cand = cnt.iter().enumerate().map(|(i, x)| n * i + x).collect_vec();
-            let mut pos = cand.iter().map(|id| state.search(*id as u32)).collect_vec();
-            pos = pos.into_iter().filter(|(k,_,_)| *k != 1).collect();
-            pos.sort();
-            let mut target = 0;
-            let mut act = vec![];
+        };
+        // if dests[i] remains (!0, !0), there is no task for crane i in this turn
+        let mut dests = vec![(!0, !0); n_crane];
+        for i in 0..n_crane {
+            let (x, y) = self.state.get_crane_pos(i);
+            let cont = self.state.cranes[i].container;
+            let large = self.state.cranes[i].large;
+            if cont != -1 {
+                // crane is holding some container
+                let dest = dest_of_container(cont);
+                let reachable = self.state.reachable((x, y), dest, large);
+                if reachable {
+                    // Move toward the destination
+                    dests[i] = dest;
+                } else if y != n - 1 {
+                    // The container currently holded by this crane
+                    // cannot be carried to the destination.
+                    // Release the container at current position.
+                    dests[i] = (x, y);
+                } else {
+                    // maybe stuck
+                    // stuck[i] = true;
+                    dests[i] = dest;
+                }
+            } else {
+                // crane is currently not holding a container
+                // pick some container from stock
+                let mut target = !0;
+                for j in 0..pos.len() {
+                    let (k, a, b) = pos[j];
+                    let dest1: (usize, usize); // pick at dest1
+                    let dest2: (usize, usize); // release at dest1
+                    if k == 0 {
+                        // pick a container already on the board
+                        let c = self.state.board[a][b];
+                        dest1 = (a, b);
+                        dest2 = dest_of_container(c);
+                    } else if k == 2 {
+                        // move away a container in front of the queue
+                        let c = self.state.board[b][0];
+                        dest1 = (b, 0);
+                        dest2 = dest_of_container(c);
+                    } else {
+                        // container is holded by another crane
+                        continue;
+                    }
+                    let reachable = self.state.reachable(dest1, dest2, large);
+                    if reachable {
+                        // task of crane i was determined
+                        target = j;
+                        dests[i] = dest1;
+                        break;
+                    }
+                }
+                if target != !0 {
+                    pos.remove(target);
+                }
+            }
+        }
+        dests
+    }
+    fn consider_next_move(&self, dests: &Vec<(usize, usize)>) -> Vec<Move> {
+        let n = self.input.n;
+        let n_crane = dests.len();
+        let mut preferable_moves = vec![];
+        for i in 0..n_crane {
+            let mut mvs;
+            let dest = dests[i];
+            let (x, y) = self.state.get_crane_pos(i);
+            let cont = self.state.cranes[i].container;
+            let large = self.state.cranes[i].large;
+            if dest == (!0, !0) {
+                // No task for this crane
+                // Any move is ok
+                mvs = vec![Move::Stay];
+                for dir in 0..4 {
+                    let mv = Move::Move(dir);
+                    if mv.next((x, y), n).is_some() {
+                        mvs.push(mv);
+                    }
+                }
+            } else if dest == (x, y) {
+                // current position is the destination
+                if cont == -1 {
+                    assert_ne!(self.state.board[x][y], -1);
+                    mvs = vec![Move::Pick];
+                } else {
+                    mvs = vec![Move::Release];
+                }
+            } else {
+                let mv_cand =
+                    self.state
+                        .bfs((x, y), dest, large || self.state.cranes[i].container == -1);
+                mvs = mv_cand;
+            }
+            preferable_moves.push(mvs);
+        }
+        for cand in preferable_moves.iter().multi_cartesian_product() {
             let mut next = vec![];
             for i in 0..n_crane {
-                let mut override_next = vec![];
-                let x = state.cranes[i].x;
-                let y = state.cranes[i].y;
-                let large = state.cranes[i].large;
-                let dest;
-                if bombed[i] {
-                    dest = (!0, !0);
-                } else if state.cranes[i].container != -1 {
-                    if cand.contains(&(state.cranes[i].container as usize)) {
-                        dest = ((state.cranes[i].container / n as i32) as usize, n - 1);
-                    } else {
-                        let (i, j) = state.search_free_space();
-                        dest = (i, j);
-                    }
-                }
-                else {
-                    let (k, i, j) = pos[target];
-                    target += 1;
-                    if k == 0 {
-                        dest = (i, j);
-                    } else if k == 2 {
-                        let i = j;
-                        dest = (i, 0);
-                    }
-                    else {
-                        dest = (!0, !0);
-                        eprintln!("Container is already holded by another crane!");
-                    }
-                }
-                let ok = |nx: usize, ny: usize| {
-                    if !large && state.cranes[i].container != -1 && state.board[nx][ny] != -1 {
-                        return false
-                    }
-                    for i in 0..next.len() {
-                        let p1 = (state.cranes[i].x, state.cranes[i].y);
-                        let p2 = (x, y);
-                        let q1 = next[i];
-                        let q2 = (nx, ny);
-                        if q1 == q2 {
-                            return false
-                        }
-                        if q1 == p2 && q2 == p1 {
-                            return false
-                        }
-                    }
-                    true
-                };
-                let mut nx = x;
-                let mut ny = y;
-                let mut mv = None;
-                if dest == (!0, !0) {
-                    if !bombed[i] {
-                        bombed[i] = true;
-                        mv = Some(Move::Bomb);
-                    } else {
-                        mv = Some(Move::Stay);
-                    }
-                }
-                else if (x,y) == dest {
-                    if state.cranes[i].container == -1 && ok(x, y) {
-                        nx = x;
-                        ny = y;
-                        mv = Some(Move::Pick);
-                    } else if state.cranes[i].container != -1 {
-                        for j in 0..i {
-                            // cancel previous move
-                            if next[j] == (x, y) {
-                                override_next.push((j, (state.cranes[j].x, state.cranes[j].y)));
-                                act[j] = Move::Stay;
-                            }
-                        }
-                        mv = Some(Move::Release);
-                        if dest.1 == n - 1 {
-                            cnt[dest.0] += 1;
-                        }
-                    }
-                } else {
-                    let (tx, ty) = dest;
-                    let mv_cand = state.bfs(
-                            (x, y),
-                            (tx, ty),
-                            large || state.cranes[i].container == -1
-                        );
-                    for mv1 in &mv_cand {
-                        let (nx1, ny1) = mv1.next((x, y), n).unwrap();
-                        if ok(nx1, ny1) {
-                            nx = nx1; ny = ny1;
-                            mv = Some(mv1.clone());
-                        }
-                    }
-                }
-                if mv.is_none() {
-                    if next.iter().all(|(px,py)| (*px,*py) != (x,y)) {
-                        mv = Some(Move::Stay);
-                    } else {
-                        // prefer evacuate to left rather than up.
-                        // it sometimes prevent small crane stucks at wrong destination.
-                        for dir in [1, 3, 2, 0] {
-                            let mv1 = Move::Move(dir);
-                            if let Some((nx1, ny1)) = mv1.next((x, y), n) {
-                                if ok(nx1, ny1) {
-                                    nx = nx1; ny = ny1;
-                                    mv = Some(mv1);
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-                if mv.is_none() {
-                    for j in 0..i {
-                        // cancel previous move
-                        if next[j] == (x, y) {
-                            next[j] = (state.cranes[j].x, state.cranes[j].y);
-                            act[j] = Move::Stay;
-                        }
-                    }
-                    if state.cranes[i].container != -1 {
-                        if y == n - 1 {
-                            panic!("You cannot release container at a wrong destination.");
-                        }
-                        mv = Some(Move::Release);
-                    } else {
-                        panic!("Unknown situation! debug me.");
-                    }
-                }
-                for (j, (x, y)) in override_next.into_iter() {
-                    next[j] = (x, y);
-                }
-                act.push(mv.unwrap());
-                next.push((nx, ny));
+                let cur = self.state.get_crane_pos(i);
+                let mv = cand[i];
+                next.push(mv.next(cur, n).unwrap());
             }
+            // check colllision
+            let mut ok = true;
+            for i in 0..n_crane {
+                for j in i+1..n_crane {
+                    let pi = self.state.get_crane_pos(i);
+                    let pj = self.state.get_crane_pos(j);
+                    let qi = next[i];
+                    let qj = next[j];
+                    if qi == qj || (qi == pj && qj == pi) {
+                        ok = false;
+                    }
+                }
+            }
+            if ok {
+                return cand.iter().map(|x| (*x).clone()).collect()
+            }
+        }
+        let mut possible_moves = vec![];
+        for i in 0..n_crane {
+            let mut mvs = vec![Move::Stay];
+            let (x, y) = self.state.get_crane_pos(i);
+            let cont = self.state.cranes[i].container;
+            let large = self.state.cranes[i].large;
+            for dir in 0..4 {
+                let mv = Move::Move(dir);
+                if let Some((nx, ny)) = mv.next((x, y), n) {
+                    if large || (cont != -1 && self.state.board[nx][ny] == -1) {
+                        mvs.push(mv);
+                    }
+                }
+            }
+            possible_moves.push(mvs);
+        }
+        for k in 1..=n_crane {
+            for comb in (0..n_crane).combinations(k) {
+                let mut cand_moves = vec![];
+                for i in 0..n_crane {
+                    if comb.contains(&i) {
+                        cand_moves.push(possible_moves[i].clone());
+                    } else {
+                        cand_moves.push(preferable_moves[i].clone());
+                    }
+                }
+                for cand in cand_moves.iter().multi_cartesian_product() {
+                    if cand.iter().all(|mv| **mv == Move::Stay) {
+                        continue;
+                    }
+                    let mut next = vec![];
+                    for i in 0..n_crane {
+                        let cur = self.state.get_crane_pos(i);
+                        let mv = cand[i];
+                        next.push(mv.next(cur, n).unwrap());
+                    }
+                    // check colllision
+                    let mut ok = true;
+                    for i in 0..n_crane {
+                        for j in i+1..n_crane {
+                            let pi = self.state.get_crane_pos(i);
+                            let pj = self.state.get_crane_pos(j);
+                            let qi = next[i];
+                            let qj = next[j];
+                            if qi == qj || (qi == pj && qj == pi) {
+                                ok = false;
+                            }
+                        }
+                    }
+                    if ok {
+                        return cand.iter().map(|x| (*x).clone()).collect()
+                    }
+                }
+            }
+        }
+        panic!("Cannot find move candidate!");
+    }
+    fn solve(&mut self) -> Solution {
+        let n = self.input.n;
+        let mut actions = vec![];
+
+        let n_crane = 2;
+        actions.append(&mut self.initial_moves(n_crane));
+        self.state.execute(&actions).unwrap();
+
+        let mut turn = 0;
+        while !self.state.done.iter().map(|v| v.len()).all(|x| x == n) {
+            if turn > 1000 {
+                break;
+            }
+            let dests = self.match_crane_with_target(n_crane);
+            let act = self.consider_next_move(&dests);
             let ext_act = extend_move(&act, n);
-            eprintln!("turn: {}: {}", turn, ext_act.iter().map(|mv| mv.to_char()).collect::<String>());
-            state.step(&ext_act).unwrap();
+            eprintln!(
+                "turn: {}: {}",
+                turn,
+                ext_act.iter().map(|mv| mv.to_char()).collect::<String>()
+            );
+            self.state.step(&ext_act).unwrap();
             actions.push(ext_act);
             turn += 1;
         }
@@ -533,7 +616,7 @@ impl Solver {
 
 fn main() {
     let input = Input::from_stdin();
-    let solver = Solver::new(input);
+    let mut solver = Solver::new(input);
     let sol = solver.solve();
     sol.print();
 }
