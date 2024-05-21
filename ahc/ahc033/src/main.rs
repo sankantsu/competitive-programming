@@ -525,13 +525,6 @@ impl Solver {
             }
             preferable_moves.push(mvs);
         }
-        for cand in preferable_moves.iter().multi_cartesian_product() {
-            let cand = cand.into_iter().cloned().collect();
-            let ok = self.validate_turn_action(&cand);
-            if ok {
-                return cand
-            }
-        }
         let mut possible_moves = vec![];
         for i in 0..n_crane {
             let mut mvs = vec![Move::Stay];
@@ -548,7 +541,8 @@ impl Solver {
             }
             possible_moves.push(mvs);
         }
-        for k in 1..=n_crane {
+        // try the candidates with more preferable moves first
+        for k in 0..=n_crane {
             for comb in (0..n_crane).combinations(k) {
                 let mut cand_moves = vec![];
                 for i in 0..n_crane {
