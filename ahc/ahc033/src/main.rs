@@ -549,6 +549,7 @@ impl Solver {
         }
         // try the candidates with more preferable moves first
         for k in 0..=n_crane {
+            let mut acceptable_cands = vec![];
             for comb in (0..n_crane).combinations(k) {
                 let mut cand_moves = vec![];
                 for i in 0..n_crane {
@@ -565,9 +566,18 @@ impl Solver {
                     }
                     let ok = self.validate_turn_action(&cand);
                     if ok {
-                        return cand
+                        acceptable_cands.push(cand);
                     }
                 }
+            }
+            if !acceptable_cands.is_empty() {
+                // Prioritize pick/release over other actions
+                acceptable_cands.sort_by_key(|cand| {
+                    cand.iter()
+                        .filter(|&mv| *mv == Move::Pick || *mv == Move::Release)
+                        .count()
+                });
+                return acceptable_cands.pop().unwrap();
             }
         }
         panic!("Cannot find move candidate!");
