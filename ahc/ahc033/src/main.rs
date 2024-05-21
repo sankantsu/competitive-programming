@@ -276,16 +276,17 @@ impl State {
         }
         (!0, !0, !0)
     }
-    fn search_free_space(&self) -> (usize, usize) {
+    fn search_free_space_list(&self) -> Vec<(usize, usize)> {
         let n = self.len();
+        let mut res = vec![];
         for i in 0..n {
             for j in (2..n - 1).rev() {
                 if self.board[i][j] == -1 {
-                    return (i, j);
+                    res.push((i, j));
                 }
             }
         }
-        (!0, !0)
+        res
     }
     // search shortest path and returns (all possible) first move if possible
     fn bfs(&self, from: (usize, usize), to: (usize, usize), move_over: bool) -> Vec<Move> {
@@ -309,7 +310,6 @@ impl State {
             }
             let mut queue = VecDeque::new();
             queue.push_back((sx1, sy1, 1));
-            dist[sx][sy] = 0;
             dist[sx1][sy1] = 1;
             while !queue.is_empty() {
                 let (x, y, d) = queue.pop_front().unwrap();
@@ -397,12 +397,18 @@ impl Solver {
             .collect_vec();
         pos.sort();
 
-        let dest_of_container = |cont| {
+        let dest_of_container = |cont, start, is_large| {
             if cand.contains(&cont) {
                 // this container can be carried out
                 (cont as usize / n, n - 1)
             } else {
-                self.state.search_free_space()
+                let lst = self.state.search_free_space_list();
+                for &dest in &lst {
+                    if self.state.reachable(start, dest, is_large) {
+                        return dest
+                    }
+                }
+                (!0, !0)
             }
         };
         // if dests[i] remains (!0, !0), there is no task for crane i in this turn
@@ -413,7 +419,7 @@ impl Solver {
             let large = self.state.cranes[i].large;
             if cont != -1 {
                 // crane is holding some container
-                let dest = dest_of_container(cont);
+                let dest = dest_of_container(cont, (x, y), large);
                 let reachable = self.state.reachable((x, y), dest, large);
                 if reachable {
                     // Move toward the destination
@@ -440,12 +446,12 @@ impl Solver {
                         // pick a container already on the board
                         let c = self.state.board[a][b];
                         dest1 = (a, b);
-                        dest2 = dest_of_container(c);
+                        dest2 = dest_of_container(c, dest1, large);
                     } else if k == 2 {
                         // move away a container in front of the queue
                         let c = self.state.board[b][0];
                         dest1 = (b, 0);
-                        dest2 = dest_of_container(c);
+                        dest2 = dest_of_container(c, dest1, large);
                     } else {
                         // container is holded by another crane
                         continue;
@@ -575,8 +581,9 @@ impl Solver {
         self.state.execute(&actions).unwrap();
 
         let mut turn = 0;
+        let max_turn = 1000;
         while !self.state.done.iter().map(|v| v.len()).all(|x| x == n) {
-            if turn > 1000 {
+            if turn > max_turn {
                 break;
             }
             let dests = self.match_crane_with_target(n_crane);
