@@ -405,7 +405,7 @@ impl Solver {
                 let lst = self.state.search_free_space_list();
                 for &dest in &lst {
                     if self.state.reachable(start, dest, is_large) {
-                        return dest
+                        return dest;
                     }
                 }
                 (!0, !0)
@@ -483,7 +483,7 @@ impl Solver {
         // check colllision
         let mut ok = true;
         for i in 0..n_crane {
-            for j in i+1..n_crane {
+            for j in (i + 1)..n_crane {
                 let pi = self.state.get_crane_pos(i);
                 let pj = self.state.get_crane_pos(j);
                 let qi = next[i];
