@@ -465,6 +465,30 @@ impl Solver {
         }
         dests
     }
+    fn validate_turn_action(&self, cand: &Vec<Move>) -> bool {
+        let n = self.input.n;
+        let n_crane = cand.len();
+        let mut next = vec![];
+        for i in 0..n_crane {
+            let cur = self.state.get_crane_pos(i);
+            let mv = &cand[i];
+            next.push(mv.next(cur, n).unwrap());
+        }
+        // check colllision
+        let mut ok = true;
+        for i in 0..n_crane {
+            for j in i+1..n_crane {
+                let pi = self.state.get_crane_pos(i);
+                let pj = self.state.get_crane_pos(j);
+                let qi = next[i];
+                let qj = next[j];
+                if qi == qj || (qi == pj && qj == pi) {
+                    ok = false;
+                }
+            }
+        }
+        ok
+    }
     fn consider_next_move(&self, dests: &Vec<(usize, usize)>) -> Vec<Move> {
         let n = self.input.n;
         let n_crane = dests.len();
@@ -502,27 +526,10 @@ impl Solver {
             preferable_moves.push(mvs);
         }
         for cand in preferable_moves.iter().multi_cartesian_product() {
-            let mut next = vec![];
-            for i in 0..n_crane {
-                let cur = self.state.get_crane_pos(i);
-                let mv = cand[i];
-                next.push(mv.next(cur, n).unwrap());
-            }
-            // check colllision
-            let mut ok = true;
-            for i in 0..n_crane {
-                for j in i+1..n_crane {
-                    let pi = self.state.get_crane_pos(i);
-                    let pj = self.state.get_crane_pos(j);
-                    let qi = next[i];
-                    let qj = next[j];
-                    if qi == qj || (qi == pj && qj == pi) {
-                        ok = false;
-                    }
-                }
-            }
+            let cand = cand.into_iter().cloned().collect();
+            let ok = self.validate_turn_action(&cand);
             if ok {
-                return cand.iter().map(|x| (*x).clone()).collect()
+                return cand
             }
         }
         let mut possible_moves = vec![];
@@ -552,30 +559,13 @@ impl Solver {
                     }
                 }
                 for cand in cand_moves.iter().multi_cartesian_product() {
-                    if cand.iter().all(|mv| **mv == Move::Stay) {
+                    let cand = cand.into_iter().cloned().collect_vec();
+                    if cand.iter().all(|mv| *mv == Move::Stay) {
                         continue;
                     }
-                    let mut next = vec![];
-                    for i in 0..n_crane {
-                        let cur = self.state.get_crane_pos(i);
-                        let mv = cand[i];
-                        next.push(mv.next(cur, n).unwrap());
-                    }
-                    // check colllision
-                    let mut ok = true;
-                    for i in 0..n_crane {
-                        for j in i+1..n_crane {
-                            let pi = self.state.get_crane_pos(i);
-                            let pj = self.state.get_crane_pos(j);
-                            let qi = next[i];
-                            let qj = next[j];
-                            if qi == qj || (qi == pj && qj == pi) {
-                                ok = false;
-                            }
-                        }
-                    }
+                    let ok = self.validate_turn_action(&cand);
                     if ok {
-                        return cand.iter().map(|x| (*x).clone()).collect()
+                        return cand
                     }
                 }
             }
