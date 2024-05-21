@@ -540,7 +540,7 @@ impl Solver {
             for dir in 0..4 {
                 let mv = Move::Move(dir);
                 if let Some((nx, ny)) = mv.next((x, y), n) {
-                    if large || (cont != -1 && self.state.board[nx][ny] == -1) {
+                    if large || cont == -1 || self.state.board[nx][ny] == -1 {
                         mvs.push(mv);
                     }
                 }
