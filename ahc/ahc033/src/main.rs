@@ -586,14 +586,14 @@ impl Solver {
         let n = self.input.n;
         let mut actions = vec![];
 
-        let n_crane = 2;
+        let n_crane = 3;
         actions.append(&mut self.initial_moves(n_crane));
         self.state.execute(&actions).unwrap();
 
         let mut turn = 0;
         let max_turn = 1000;
         while !self.state.done.iter().map(|v| v.len()).all(|x| x == n) {
-            if turn > max_turn {
+            if turn >= max_turn {
                 break;
             }
             let dests = self.match_crane_with_target(n_crane);
