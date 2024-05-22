@@ -16,6 +16,11 @@ impl Input {
     }
 }
 
+fn manhattan_distance(x: (usize, usize), y: (usize, usize)) -> usize {
+    let dist = |a, b| usize::max(a, b) - usize::min(a, b);
+    dist(x.0, y.0) + dist(x.1, y.1)
+}
+
 #[derive(Clone, Debug, PartialEq)]
 enum Move {
     Stay,
@@ -398,14 +403,12 @@ impl Solver {
     fn match_crane_with_target(&self, n_crane: usize) -> Vec<(usize, usize)> {
         let n = self.input.n;
         let cand = self.state.next_containers_to_caryy_out();
-        let mut pos = cand
+        let pos = cand
             .iter()
             .map(|id| self.state.search(*id as u32))
             .collect_vec();
-        pos.sort();
 
         let dest_of_container = |cont, start, is_large, dests: &Vec<(usize, usize)>| {
-            let (sx, sy) = start;
             if cand.contains(&cont) {
                 // this container can be carried out
                 (cont as usize / n, n - 1)
@@ -417,10 +420,14 @@ impl Solver {
                     }
                 }
                 let lst = self.state.search_additional_free_cells();
-                let mut cand = lst.into_iter().filter(|dest| self.state.reachable(start, *dest, is_large) && !dests.contains(dest)).collect_vec();
+                let mut cand = lst
+                    .into_iter()
+                    .filter(|dest| {
+                        self.state.reachable(start, *dest, is_large) && !dests.contains(dest)
+                    })
+                    .collect_vec();
                 if !cand.is_empty() {
-                    let diff = |a, b| { usize::max(a, b) - usize::min(a, b) };
-                    cand.sort_by_key(|&(tx, ty)| diff(sx, tx) + diff(sy, ty));
+                    cand.sort_by_key(|&dest| manhattan_distance(start, dest));
                     return cand.into_iter().next().unwrap();
                 }
                 (!0, !0)
@@ -428,7 +435,11 @@ impl Solver {
         };
         // if dests[i] remains (!0, !0), there is no task for crane i in this turn
         let mut dests = vec![(!0, !0); n_crane];
-        for i in 0..n_crane {
+        let mut busy_list = (0..n_crane)
+            .into_iter()
+            .filter(|i| self.state.cranes[*i].container != -1)
+            .collect_vec();
+        for &i in &busy_list {
             let (x, y) = self.state.get_crane_pos(i);
             let cont = self.state.cranes[i].container;
             let large = self.state.cranes[i].large;
@@ -449,39 +460,42 @@ impl Solver {
                     // stuck[i] = true;
                     dests[i] = dest;
                 }
+            }
+        }
+        // Assign the nearest crane to each task
+        for task in &pos {
+            let (k, a, b) = *task;
+            let dest1; // pick at dest1
+            if k == 0 {
+                dest1 = (a, b);
+            } else if k == 2 {
+                dest1 = (b, 0);
             } else {
-                // crane is currently not holding a container
-                // pick some container from stock
-                let mut target = !0;
-                for j in 0..pos.len() {
-                    let (k, a, b) = pos[j];
-                    let dest1: (usize, usize); // pick at dest1
-                    let dest2: (usize, usize); // release at dest1
-                    if k == 0 {
-                        // pick a container already on the board
-                        let c = self.state.board[a][b];
-                        dest1 = (a, b);
-                        dest2 = dest_of_container(c, dest1, large, &dests);
-                    } else if k == 2 {
-                        // move away a container in front of the queue
-                        let c = self.state.board[b][0];
-                        dest1 = (b, 0);
-                        dest2 = dest_of_container(c, dest1, large, &dests);
-                    } else {
-                        // container is holded by another crane
-                        continue;
-                    }
-                    let reachable = self.state.reachable(dest1, dest2, large);
-                    if reachable {
-                        // task of crane i was determined
-                        target = j;
-                        dests[i] = dest1;
-                        break;
-                    }
+                continue; // container is holded by another crane
+            };
+            let c = self.state.board[dest1.0][dest1.1];
+            let feasible = |i: usize| {
+                // Can i th crane take on the task?
+                let large = self.state.cranes[i].large;
+                let dest2 = dest_of_container(c, dest1, large, &dests); // release at dest2
+                self.state.reachable(dest1, dest2, large)
+            };
+            let mut cand = vec![];
+            for i in 0..n_crane {
+                if busy_list.contains(&i) {
+                    continue;
                 }
-                if target != !0 {
-                    pos.remove(target);
+                if feasible(i) {
+                    let cur = self.state.get_crane_pos(i);
+                    let dist = manhattan_distance(cur, dest1);
+                    cand.push((dist, i));
                 }
+            }
+            if !cand.is_empty() {
+                cand.sort();
+                let i = cand.into_iter().next().unwrap().1;
+                dests[i] = dest1;
+                busy_list.push(i);
             }
         }
         dests
@@ -569,7 +583,7 @@ impl Solver {
         let n = self.input.n;
         let mut actions = vec![];
 
-        let n_crane = 3;
+        let n_crane = 4;
         actions.append(&mut self.initial_moves(n_crane));
         self.state.execute(&actions).unwrap();
 
