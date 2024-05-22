@@ -276,7 +276,7 @@ impl State {
         }
         (!0, !0, !0)
     }
-    fn search_free_space_list(&self) -> Vec<(usize, usize)> {
+    fn search_free_cells(&self) -> Vec<(usize, usize)> {
         let n = self.len();
         let mut res = vec![];
         for i in 0..n {
@@ -284,6 +284,17 @@ impl State {
                 if self.board[i][j] == -1 {
                     res.push((i, j));
                 }
+            }
+        }
+        res
+    }
+    fn search_additional_free_cells(&self) -> Vec<(usize, usize)> {
+        let n = self.len();
+        let mut res = vec![];
+        // already emptied carry-in cell can be used as free cell
+        for i in 0..n {
+            if self.queue[i].is_empty() && self.board[i][0] == -1 {
+                res.push((i, 0));
             }
         }
         res
@@ -394,15 +405,23 @@ impl Solver {
         pos.sort();
 
         let dest_of_container = |cont, start, is_large, dests: &Vec<(usize, usize)>| {
+            let (sx, sy) = start;
             if cand.contains(&cont) {
                 // this container can be carried out
                 (cont as usize / n, n - 1)
             } else {
-                let lst = self.state.search_free_space_list();
+                let lst = self.state.search_free_cells();
                 for &dest in &lst {
                     if self.state.reachable(start, dest, is_large) && !dests.contains(&dest) {
                         return dest;
                     }
+                }
+                let lst = self.state.search_additional_free_cells();
+                let mut cand = lst.into_iter().filter(|dest| self.state.reachable(start, *dest, is_large) && !dests.contains(dest)).collect_vec();
+                if !cand.is_empty() {
+                    let diff = |a, b| { usize::max(a, b) - usize::min(a, b) };
+                    cand.sort_by_key(|&(tx, ty)| diff(sx, tx) + diff(sy, ty));
+                    return cand.into_iter().next().unwrap();
                 }
                 (!0, !0)
             }
