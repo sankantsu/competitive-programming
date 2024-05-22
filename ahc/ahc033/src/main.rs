@@ -397,14 +397,14 @@ impl Solver {
             .collect_vec();
         pos.sort();
 
-        let dest_of_container = |cont, start, is_large| {
+        let dest_of_container = |cont, start, is_large, dests: &Vec<(usize, usize)>| {
             if cand.contains(&cont) {
                 // this container can be carried out
                 (cont as usize / n, n - 1)
             } else {
                 let lst = self.state.search_free_space_list();
                 for &dest in &lst {
-                    if self.state.reachable(start, dest, is_large) {
+                    if self.state.reachable(start, dest, is_large) && !dests.contains(&dest) {
                         return dest;
                     }
                 }
@@ -419,7 +419,7 @@ impl Solver {
             let large = self.state.cranes[i].large;
             if cont != -1 {
                 // crane is holding some container
-                let dest = dest_of_container(cont, (x, y), large);
+                let dest = dest_of_container(cont, (x, y), large, &dests);
                 let reachable = self.state.reachable((x, y), dest, large);
                 if reachable {
                     // Move toward the destination
@@ -446,12 +446,12 @@ impl Solver {
                         // pick a container already on the board
                         let c = self.state.board[a][b];
                         dest1 = (a, b);
-                        dest2 = dest_of_container(c, dest1, large);
+                        dest2 = dest_of_container(c, dest1, large, &dests);
                     } else if k == 2 {
                         // move away a container in front of the queue
                         let c = self.state.board[b][0];
                         dest1 = (b, 0);
-                        dest2 = dest_of_container(c, dest1, large);
+                        dest2 = dest_of_container(c, dest1, large, &dests);
                     } else {
                         // container is holded by another crane
                         continue;
