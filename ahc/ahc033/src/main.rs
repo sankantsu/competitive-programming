@@ -288,17 +288,16 @@ impl State {
         }
         res
     }
-    // search shortest path and returns (all possible) first move if possible
-    fn bfs(&self, from: (usize, usize), to: (usize, usize), move_over: bool) -> Vec<Move> {
-        let dx = [!0, 0, 1, 0];
-        let dy = [0, !0, 0, 1];
+    // returns the distance to the destination after each move (empty vector when unreachable)
+    fn bfs(&self, from: (usize, usize), to: (usize, usize), move_over: bool) -> Vec<(Move, i32)> {
+        let dx = [!0, 0, 1, 0, 0]; // 5 th move is stay
+        let dy = [0, !0, 0, 1, 0];
         let n = self.len();
         let (sx, sy) = from;
         let (tx, ty) = to;
         let out_of_range = |x: usize, y: usize| !(0..n).contains(&x) || !(0..n).contains(&y);
-        let mut mv = vec![];
-        let mut min_dist = 1usize << 60;
-        for dir in 0..4 {
+        let mut res = vec![];
+        for dir in 0..5 {
             let mut dist = vec![vec![1usize << 60; n]; n];
             let sx1 = usize::wrapping_add(sx, dx[dir]);
             let sy1 = usize::wrapping_add(sy, dy[dir]);
@@ -314,32 +313,29 @@ impl State {
             while !queue.is_empty() {
                 let (x, y, d) = queue.pop_front().unwrap();
                 if x == tx && y == ty {
-                    if d < min_dist {
-                        min_dist = d;
-                        mv = vec![Move::Move(dir)];
-                    } else if d == min_dist {
-                        mv.push(Move::Move(dir));
-                    }
+                    let mv = if dir < 4 { Move::Move(dir) } else { Move::Stay };
+                    res.push((mv, d as i32));
                     break;
                 }
                 for dir1 in 0..4 {
                     let nx = usize::wrapping_add(x, dx[dir1]);
                     let ny = usize::wrapping_add(y, dy[dir1]);
-                    if out_of_range(nx, ny) {
-                        continue;
-                    }
-                    if !move_over && self.board[nx][ny] != -1 {
-                        continue;
-                    }
-                    if dist[nx][ny] < d {
+                    if out_of_range(nx, ny)
+                        || !move_over && self.board[nx][ny] != -1
+                        || dist[nx][ny] < d
+                    {
                         continue;
                     }
                     queue.push_back((nx, ny, d + 1));
                     dist[nx][ny] = d + 1;
                 }
             }
+            if res.is_empty() {
+                // unreachable
+                break;
+            }
         }
-        mv
+        res
     }
     fn reachable(&self, from: (usize, usize), to: (usize, usize), move_over: bool) -> bool {
         self.bfs(from, to, move_over).len() != 0
@@ -498,9 +494,9 @@ impl Solver {
     fn consider_next_move(&self, dests: &Vec<(usize, usize)>) -> Vec<Move> {
         let n = self.input.n;
         let n_crane = dests.len();
-        let mut preferable_moves = vec![];
+        let mut possible_moves = vec![];
         for i in 0..n_crane {
-            let mut mvs;
+            let mut mvs = vec![];
             let dest = dests[i];
             let (x, y) = self.state.get_crane_pos(i);
             let cont = self.state.cranes[i].container;
@@ -508,77 +504,45 @@ impl Solver {
             if dest == (!0, !0) {
                 // No task for this crane
                 // Any move is ok
-                mvs = vec![Move::Stay];
+                mvs.push((Move::Stay, 0));
                 for dir in 0..4 {
                     let mv = Move::Move(dir);
                     if mv.next((x, y), n).is_some() {
-                        mvs.push(mv);
+                        mvs.push((mv, 0));
                     }
                 }
             } else if dest == (x, y) {
                 // current position is the destination
                 if cont == -1 {
                     assert_ne!(self.state.board[x][y], -1);
-                    mvs = vec![Move::Pick];
+                    mvs.push((Move::Pick, 0));
                 } else {
-                    mvs = vec![Move::Release];
+                    mvs.push((Move::Release, 0));
                 }
             } else {
-                let mv_cand =
-                    self.state
-                        .bfs((x, y), dest, large || self.state.cranes[i].container == -1);
-                mvs = mv_cand;
-            }
-            preferable_moves.push(mvs);
-        }
-        let mut possible_moves = vec![];
-        for i in 0..n_crane {
-            let mut mvs = vec![Move::Stay];
-            let (x, y) = self.state.get_crane_pos(i);
-            let cont = self.state.cranes[i].container;
-            let large = self.state.cranes[i].large;
-            for dir in 0..4 {
-                let mv = Move::Move(dir);
-                if let Some((nx, ny)) = mv.next((x, y), n) {
-                    if large || cont == -1 || self.state.board[nx][ny] == -1 {
-                        mvs.push(mv);
-                    }
-                }
+                mvs = self
+                    .state
+                    .bfs((x, y), dest, large || self.state.cranes[i].container == -1);
             }
             possible_moves.push(mvs);
         }
-        // try the candidates with more preferable moves first
-        for k in 0..=n_crane {
-            let mut acceptable_cands = vec![];
-            for comb in (0..n_crane).combinations(k) {
-                let mut cand_moves = vec![];
-                for i in 0..n_crane {
-                    if comb.contains(&i) {
-                        cand_moves.push(possible_moves[i].clone());
-                    } else {
-                        cand_moves.push(preferable_moves[i].clone());
-                    }
-                }
-                for cand in cand_moves.iter().multi_cartesian_product() {
-                    let cand = cand.into_iter().cloned().collect_vec();
-                    if cand.iter().all(|mv| *mv == Move::Stay) {
-                        continue;
-                    }
-                    let ok = self.validate_turn_action(&cand);
-                    if ok {
-                        acceptable_cands.push(cand);
-                    }
-                }
+        let mut acceptable_cands = vec![];
+        for cand in possible_moves.iter().multi_cartesian_product() {
+            let (cand, dists): (Vec<_>, Vec<_>) = cand.into_iter().cloned().unzip();
+            if cand.iter().all(|mv| *mv == Move::Stay) {
+                // no progress
+                continue;
             }
-            if !acceptable_cands.is_empty() {
-                // Prioritize pick/release over other actions
-                acceptable_cands.sort_by_key(|cand| {
-                    cand.iter()
-                        .filter(|&mv| *mv == Move::Pick || *mv == Move::Release)
-                        .count()
-                });
-                return acceptable_cands.pop().unwrap();
+            let d: i32 = dists.into_iter().sum();
+            let ok = self.validate_turn_action(&cand);
+            if ok {
+                acceptable_cands.push((cand, d));
             }
+        }
+        if !acceptable_cands.is_empty() {
+            // return candidate with best progress
+            acceptable_cands.sort_by_key(|(_, d)| *d);
+            return acceptable_cands.into_iter().next().unwrap().0;
         }
         panic!("Cannot find move candidate!");
     }
