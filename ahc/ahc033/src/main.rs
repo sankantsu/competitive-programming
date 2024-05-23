@@ -403,10 +403,11 @@ impl Solver {
     fn match_crane_with_target(&self, n_crane: usize) -> Vec<(usize, usize)> {
         let n = self.input.n;
         let cand = self.state.next_containers_to_caryy_out();
-        let pos = cand
+        let mut pos = cand
             .iter()
             .map(|id| self.state.search(*id as u32))
             .collect_vec();
+        pos.sort();
 
         let dest_of_container = |cont, start, is_large, dests: &Vec<(usize, usize)>| {
             if cand.contains(&cont) {
