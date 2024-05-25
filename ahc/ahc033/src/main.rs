@@ -580,7 +580,7 @@ impl Solver {
         let n = self.input.n;
         let mut actions = vec![];
 
-        let n_crane = 4;
+        let n_crane = 5;
         actions.append(&mut self.initial_moves(n_crane));
         self.state.execute(&actions).unwrap();
 
