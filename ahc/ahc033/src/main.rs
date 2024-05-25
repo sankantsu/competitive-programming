@@ -95,6 +95,13 @@ impl Crane {
     }
 }
 
+enum ContainerState {
+    Done,                // already have carried out
+    Carrying(usize),     // Carrying(i): i th crane is carrying this container
+    Queue(usize, usize), // Queue(i, depth): this container is in i the queue
+    Board(usize, usize), // Board(x, y): this container is at (x, y) position of the board
+}
+
 #[derive(Clone, Debug)]
 struct State {
     queue: Vec<Vec<u32>>, // container queue which contains containers have not yet carried in
@@ -246,40 +253,89 @@ impl State {
         self.carry_in();
         Ok(())
     }
-    fn next_containers_to_caryy_out(&self) -> Vec<i32> {
+    fn next_containers_to_caryy_out(&self) -> Vec<usize> {
         let n = self.len();
-        (0..n)
-            .enumerate()
-            .map(|(i, x)| {
-                if self.done[i].len() == n {
-                    -1
-                } else {
-                    (n * x + self.done[i].len()) as i32
-                }
-            })
-            .collect()
+        let n_done = (0..n).map(|i| self.done[i].len()).collect_vec();
+        (0..n).filter(|i| n_done[*i] < n).map(|i| n*i + n_done[i]).collect()
     }
     fn get_crane_pos(&self, i: usize) -> (usize, usize) {
         self.cranes[i].get_pos()
     }
-    fn search(&self, container: u32) -> (usize, usize, usize) {
+    fn search_container(&self, container: u32) -> ContainerState {
         let n = self.len();
         for i in 0..n {
             for j in 0..n {
                 if self.board[i][j] == container as i32 {
-                    return (0, i, j);
+                    return ContainerState::Board(i, j)
                 }
             }
         }
         for i in 0..n {
             let k = self.queue[i].len();
-            for j in 0..k {
-                if self.queue[i][k - 1 - j] == container {
-                    return (2, j, i);
+            for depth in 0..k {
+                if self.queue[i][k - 1 - depth] == container {
+                    return ContainerState::Queue(i, depth)
                 }
             }
         }
-        (!0, !0, !0)
+        for i in 0..n {
+            let cont = self.cranes[i].container;
+            if container as i32 == cont {
+                return ContainerState::Carrying(i)
+            }
+        }
+        ContainerState::Done
+    }
+    fn determine_target_containers(&self) -> Vec<usize> {
+        let n = self.len();
+        let container_states = (0..n*n).map(|cont| self.search_container(cont as u32)).collect_vec();
+        let mut cand = self.next_containers_to_caryy_out();
+        let mut targets = vec![];
+        let mut n_kicked = vec![0; n];
+        while targets.len() < n && !cand.is_empty() {
+            let calc_n_kick = |cs: &ContainerState| {
+                match cs {
+                    ContainerState::Board(_, _) => 0,
+                    ContainerState::Carrying(_) => 0,
+                    ContainerState::Queue(i, d) => usize::max(0, d + 1 - n_kicked[*i]),
+                    ContainerState::Done => usize::MAX,
+                }
+            };
+            cand.sort_by_key(|cont| calc_n_kick(&container_states[*cont]));
+            let cont = cand[0];
+            targets.push(cont);
+            if let ContainerState::Queue(i, d) = container_states[cont] {
+                n_kicked[i] = usize::max(n_kicked[i], d + 1);
+            }
+            //if (cont + 1) % 5 != 0 {
+            //    cand.push(cont + 1);
+            //}
+            cand.remove(0);
+        }
+        targets
+    }
+    fn make_destinations(&self) -> Vec<(usize, usize)> {
+        let n = self.len();
+        let targets = self.determine_target_containers();
+        let mut dests = vec![];
+        let mut n_kicked = vec![0; n];
+        for t in &targets {
+            let cs = self.search_container(*t as u32);
+            match cs {
+                ContainerState::Done => continue,
+                ContainerState::Carrying(_) => continue,
+                ContainerState::Board(x, y) => {
+                    dests.push((x, y));
+                },
+                ContainerState::Queue(i, d) => {
+                    while n_kicked[i] < d + 1 {
+                        dests.push((i, 0));
+                        n_kicked[i] += 1;
+                    }
+                }
+            }
+        }
+        dests
     }
     fn search_free_cells(&self) -> Vec<(usize, usize)> {
         let n = self.len();
@@ -398,12 +454,8 @@ impl Solver {
     // returns mapping of: crane id => destination
     fn match_crane_with_target(&self, n_crane: usize) -> Vec<(usize, usize)> {
         let n = self.input.n;
-        let cand = self.state.next_containers_to_caryy_out();
-        let mut pos = cand
-            .iter()
-            .map(|id| self.state.search(*id as u32))
-            .collect_vec();
-        pos.sort();
+        let cand = self.state.next_containers_to_caryy_out().into_iter().map(|x| x as i32).collect_vec();
+        let new_dest_set = self.state.make_destinations();
 
         let dest_of_container = |cont, start, is_large, dests: &Vec<(usize, usize)>| {
             if cand.contains(&cont) {
@@ -460,16 +512,8 @@ impl Solver {
             }
         }
         // Assign the nearest crane to each task
-        for task in &pos {
-            let (k, a, b) = *task;
-            let dest1; // pick at dest1
-            if k == 0 {
-                dest1 = (a, b);
-            } else if k == 2 {
-                dest1 = (b, 0);
-            } else {
-                continue; // container is holded by another crane
-            };
+        for task in &new_dest_set {
+            let dest1 = *task;
             let c = self.state.board[dest1.0][dest1.1];
             let feasible = |i: usize| {
                 // Can i th crane take on the task?
