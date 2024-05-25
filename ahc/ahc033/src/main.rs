@@ -346,10 +346,6 @@ impl State {
                     dist[nx][ny] = d + 1;
                 }
             }
-            if res.is_empty() {
-                // unreachable
-                break;
-            }
         }
         res
     }
