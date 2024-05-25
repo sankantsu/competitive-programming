@@ -162,6 +162,7 @@ impl State {
             }
         }
     }
+    #[allow(unused)]
     fn execute(&mut self, moves: &Vec<Vec<Move>>) -> Result<(), String> {
         for mv in moves {
             self.step(mv)?
@@ -441,16 +442,6 @@ impl Solver {
         let state = State::new(&input);
         Self { input, state }
     }
-    fn initial_moves(&self, n_crane: usize) -> Vec<Vec<Move>> {
-        let n = self.input.n;
-        let mut actions = vec![];
-        let mut bomb = vec![Move::Bomb; n];
-        for i in 0..n_crane {
-            bomb[i] = Move::Stay;
-        }
-        actions.push(bomb);
-        actions
-    }
     // returns mapping of: crane id => destination
     fn match_crane_with_target(&self, n_crane: usize) -> Vec<(usize, usize)> {
         let n = self.input.n;
@@ -625,9 +616,6 @@ impl Solver {
         let mut actions = vec![];
 
         let n_crane = 5;
-        actions.append(&mut self.initial_moves(n_crane));
-        self.state.execute(&actions).unwrap();
-
         let mut turn = 0;
         let max_turn = 1000;
         while !self.state.done.iter().map(|v| v.len()).all(|x| x == n) {
