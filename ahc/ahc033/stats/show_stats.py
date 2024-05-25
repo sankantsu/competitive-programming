@@ -34,6 +34,8 @@ def main():
     print(f"Best: {best}, Worst: {worst}")
     print(f"Mean: {mean:.2f}, Geometric Mean: {gmean:.2f}")
     plt.hist(valid_turns, bins=50)
+    plt.xlabel("Turns")
+    plt.ylabel("Occurences")
     plt.show()
 
 
