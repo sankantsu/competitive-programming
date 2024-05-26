@@ -567,6 +567,24 @@ impl Solver {
                 }
             }
         }
+        // check inversion in last row
+        let cand = self.state.next_containers_to_caryy_out();
+        for i in 0..n_crane {
+            let qi = next[i];
+            let ci = self.state.cranes[i].container as usize;
+            for j in (i + 1)..n_crane {
+                let qj = next[j];
+                let cj = self.state.cranes[j].container as usize;
+                if !(qi.1 == n - 1 && qj.1 == n - 1 && cand.contains(&ci) && cand.contains(&cj)) {
+                    continue;
+                }
+                let ri = ci as usize / n;
+                let rj = cj as usize / n;
+                if (ri < rj && qi.0 > qj.0) || (ri > rj && qi.0 < qj.0) {
+                    ok = false;
+                }
+            }
+        }
         ok
     }
     fn consider_next_move(&self, dests: &Vec<(usize, usize)>) -> Vec<Move> {
@@ -581,8 +599,9 @@ impl Solver {
             let large = self.state.cranes[i].large;
             if dest == (!0, !0) {
                 // No task for this crane
-                // Any move is ok
-                mvs.push((Move::Stay, 0));
+                // prevent staying at carry out entrance
+                let stay_cost = if y == n - 1 { 1 } else { 0 };
+                mvs.push((Move::Stay, stay_cost));
                 for dir in 0..4 {
                     let mv = Move::Move(dir);
                     if mv.next((x, y), n).is_some() {
