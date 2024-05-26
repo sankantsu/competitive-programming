@@ -342,6 +342,9 @@ impl State {
         let n = self.len();
         let mut res = vec![];
         for i in 0..n {
+            if i == n/2 {
+                continue;
+            }
             for j in (2..n - 1).rev() {
                 if self.board[i][j] == -1 {
                     res.push((i, j));
