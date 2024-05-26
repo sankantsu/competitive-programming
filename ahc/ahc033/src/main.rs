@@ -351,11 +351,6 @@ impl State {
                 }
             }
         }
-        res
-    }
-    fn search_additional_free_cells(&self) -> Vec<(usize, usize)> {
-        let n = self.len();
-        let mut res = vec![];
         // already emptied carry-in cell can be used as free cell
         for i in 0..n {
             if self.queue[i].is_empty() && self.board[i][0] == -1 {
@@ -409,6 +404,18 @@ impl State {
         }
         res
     }
+    fn calc_distance(&self, from: (usize, usize), to: (usize, usize), move_over: bool) -> usize {
+        if from == to {
+            return 0;
+        }
+        let res = self.bfs(from, to, move_over);
+        if res.is_empty() {
+            !0
+        } else {
+            let d = res.iter().map(|(_, d)| d).min().unwrap();
+            *d as usize
+        }
+    }
     fn reachable(&self, from: (usize, usize), to: (usize, usize), move_over: bool) -> bool {
         self.bfs(from, to, move_over).len() != 0
     }
@@ -451,30 +458,8 @@ impl Solver {
         let cand = self.state.next_containers_to_caryy_out().into_iter().map(|x| x as i32).collect_vec();
         let new_dest_set = self.state.make_destinations();
 
-        let dest_of_container = |cont, start, is_large, dests: &Vec<(usize, usize)>| {
-            if cand.contains(&cont) {
-                // this container can be carried out
-                (cont as usize / n, n - 1)
-            } else {
-                let lst = self.state.search_free_cells();
-                for &dest in &lst {
-                    if self.state.reachable(start, dest, is_large) && !dests.contains(&dest) {
-                        return dest;
-                    }
-                }
-                let lst = self.state.search_additional_free_cells();
-                let mut cand = lst
-                    .into_iter()
-                    .filter(|dest| {
-                        self.state.reachable(start, *dest, is_large) && !dests.contains(dest)
-                    })
-                    .collect_vec();
-                if !cand.is_empty() {
-                    cand.sort_by_key(|&dest| manhattan_distance(start, dest));
-                    return cand.into_iter().next().unwrap();
-                }
-                (!0, !0)
-            }
+        let is_carry_out_target = |cont| {
+            cand.contains(&cont)
         };
         // if dests[i] remains (!0, !0), there is no task for crane i in this turn
         let mut dests = vec![(!0, !0); n_crane];
@@ -482,45 +467,67 @@ impl Solver {
             .into_iter()
             .filter(|i| self.state.cranes[*i].container != -1)
             .collect_vec();
+        let free_cells = self.state.search_free_cells();
+        let mut n_free_cells = free_cells.len();
+        let mut needs_free_cell = vec![];
         for &i in &busy_list {
             let (x, y) = self.state.get_crane_pos(i);
             let cont = self.state.cranes[i].container;
             let large = self.state.cranes[i].large;
             if cont != -1 {
                 // crane is holding some container
-                let dest = dest_of_container(cont, (x, y), large, &dests);
-                let reachable = self.state.reachable((x, y), dest, large);
-                if reachable {
-                    // Move toward the destination
-                    dests[i] = dest;
-                } else if y != n - 1 {
-                    // The container currently holded by this crane
-                    // cannot be carried to the destination.
-                    // Release the container at current position.
-                    dests[i] = (x, y);
-                } else {
-                    // maybe stuck
-                    // stuck[i] = true;
-                    dests[i] = dest;
+                if is_carry_out_target(cont) {
+                    let dest = (cont as usize / n, n - 1);
+                    let reachable = self.state.reachable((x, y), dest, large);
+                    if reachable {
+                        // Move toward the destination
+                        dests[i] = dest;
+                    } else if y != n - 1 {
+                        // The container currently holded by this crane
+                        // cannot be carried to the destination.
+                        // Release the container at current position.
+                        dests[i] = (x, y);
+                    } else {
+                        // maybe stuck
+                        // stuck[i] = true;
+                        dests[i] = dest;
+                    }
                 }
+                else {
+                    needs_free_cell.push(i);
+                }
+            }
+        }
+        for dest in &free_cells {
+            if needs_free_cell.is_empty() {
+                break;
+            }
+            let mut distances = vec![];
+            for i in &needs_free_cell {
+                let cur = self.state.get_crane_pos(*i);
+                let large = self.state.cranes[*i].large;
+                let dist = self.state.calc_distance(cur, *dest, large);
+                distances.push((dist, i));
+            }
+            distances.sort();
+            let (d, i) = distances[0];
+            if d != !0 {
+                dests[*i] = *dest;
+                let pos = needs_free_cell.iter().position(|x| *x == *i).unwrap();
+                needs_free_cell.remove(pos);
+                n_free_cells -= 1;
             }
         }
         // Assign the nearest crane to each task
         for task in &new_dest_set {
             let dest1 = *task;
             let c = self.state.board[dest1.0][dest1.1];
-            let feasible = |i: usize| {
-                // Can i th crane take on the task?
-                let large = self.state.cranes[i].large;
-                let dest2 = dest_of_container(c, dest1, large, &dests); // release at dest2
-                self.state.reachable(dest1, dest2, large)
-            };
             let mut cand = vec![];
             for i in 0..n_crane {
                 if busy_list.contains(&i) {
                     continue;
                 }
-                if feasible(i) {
+                if is_carry_out_target(c) || n_free_cells > 0 {
                     let cur = self.state.get_crane_pos(i);
                     let dist = manhattan_distance(cur, dest1);
                     cand.push((dist, i));
@@ -531,6 +538,9 @@ impl Solver {
                 let i = cand.into_iter().next().unwrap().1;
                 dests[i] = dest1;
                 busy_list.push(i);
+                if !is_carry_out_target(c) {
+                    n_free_cells -= 1;
+                }
             }
         }
         dests
