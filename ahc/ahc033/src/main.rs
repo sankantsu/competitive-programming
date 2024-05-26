@@ -95,6 +95,7 @@ impl Crane {
     }
 }
 
+#[derive(Clone)]
 enum ContainerState {
     Done,                // already have carried out
     Carrying(usize),     // Carrying(i): i th crane is carrying this container
@@ -287,6 +288,30 @@ impl State {
         }
         ContainerState::Done
     }
+    fn list_all_container_state(&self) -> Vec<ContainerState> {
+        let n = self.len();
+        let mut states = vec![ContainerState::Done; n*n];
+        for i in 0..n {
+            for j in 0..n {
+                if self.board[i][j] != -1 {
+                    states[self.board[i][j] as usize] = ContainerState::Board(i, j);
+                }
+            }
+        }
+        for i in 0..n {
+            let k = self.queue[i].len();
+            for depth in 0..k {
+                states[self.queue[i][k - 1 - depth] as usize] = ContainerState::Queue(i, depth);
+            }
+        }
+        for i in 0..n {
+            let cont = self.cranes[i].container;
+            if cont != -1 {
+                states[self.cranes[i].container as usize] = ContainerState::Carrying(i);
+            }
+        }
+        states
+    }
     fn determine_target_containers(&self) -> Vec<usize> {
         let n = self.len();
         let container_states = (0..n*n).map(|cont| self.search_container(cont as u32)).collect_vec();
@@ -418,6 +443,24 @@ impl State {
     }
     fn reachable(&self, from: (usize, usize), to: (usize, usize), move_over: bool) -> bool {
         self.bfs(from, to, move_over).len() != 0
+    }
+    fn estimate_time_to_complete(&self, worker: usize, cont: usize) -> usize {
+        let n = self.len();
+        let state = self.search_container(cont as u32);
+        let cur = self.get_crane_pos(worker);
+        match state {
+            ContainerState::Board(x, y) => {
+                let dest1 = (x, y);
+                let dest2 = (cont / n, n - 1);
+                manhattan_distance(cur, dest1) + 1 + manhattan_distance(dest1, dest2) + 1
+            },
+            ContainerState::Carrying(i) => {
+                assert_eq!(i, worker);
+                let dest = (cont / n, n - 1);
+                manhattan_distance(cur, dest) + 1
+            }
+            _ => !0,
+        }
     }
 }
 
@@ -643,6 +686,133 @@ impl Solver {
         }
         panic!("Cannot find move candidate!");
     }
+    fn assign_all_remaining_containers(&self, n_crane: usize) -> Vec<(usize, (usize, usize))> {
+        let n = self.input.n;
+        let container_states = self.state.list_all_container_state();
+        let mut assignment = vec![(!0, (!0, !0)); n_crane];  // crane id -> (container id, dest)
+        let mut free_cranes = vec![];
+        for i in 0..n_crane {
+            if self.state.cranes[i].container != -1 {
+                // already has task
+                let cont = self.state.cranes[i].container as usize;
+                let dest = (cont / n, n - 1);
+                assignment[i] = (cont, dest);
+            } else {
+                free_cranes.push(i);
+            }
+        }
+        let mut tasks = vec![];
+        for cont in 0..n*n {
+            match container_states[cont] {
+                ContainerState::Board(x, y) => {
+                    tasks.push((cont, (x, y)));
+                },
+                ContainerState::Queue(i, _) => {
+                    tasks.push((cont, (i, 0)));
+                },
+                _ => continue,
+            }
+        }
+        for &(cont, pos) in &tasks {
+            free_cranes.sort_by_key(|i| manhattan_distance(self.state.get_crane_pos(*i), pos));
+            let worker = free_cranes[0];
+            assignment[worker] = (cont, pos);
+            free_cranes.remove(0);
+        }
+        assignment
+    }
+    fn estimate_turn_to_complete(&self, assignment: &Vec<(usize, (usize, usize))>) -> Vec<usize> {
+        let n = self.input.n;
+        let mut turn_to_complete = vec![!0 - 1; n*n];
+        for (i, &(cont, _)) in assignment.iter().enumerate() {
+            if cont == !0 {
+                continue;
+            }
+            turn_to_complete[cont] = self.state.estimate_time_to_complete(i, cont);
+        }
+        turn_to_complete
+    }
+    fn consider_next_moves_in_last_phase(&self, assignment: &Vec<(usize, (usize, usize))>) -> Vec<Move> {
+        let n = self.input.n;
+        let next_containers = self.state.next_containers_to_caryy_out();
+        let n_crane = assignment.len();
+        let turn_to_complete = self.estimate_turn_to_complete(&assignment);
+        let mut busy = vec![false; n*n];
+        for cont in 0..(n*n) {
+            if cont % n == 0 || next_containers.contains(&cont) {
+                busy[cont] = true;
+            } else if busy[cont - 1] && (turn_to_complete[cont - 1] < turn_to_complete[cont]) {
+                busy[cont] = true;
+            }
+        }
+        let mut possible_moves = vec![];
+        for i in 0..n_crane {
+            let mut mvs = vec![];
+            let (cont, dest) = assignment[i];
+            let (x, y) = self.state.get_crane_pos(i);
+            if dest == (!0, !0) {
+                // No task for this crane
+                // prevent staying at carry out entrance
+                let stay_cost = if y == n - 1 { 1 } else { 0 };
+                mvs.push((Move::Stay, stay_cost));
+                for dir in 0..4 {
+                    let mv = Move::Move(dir);
+                    if mv.next((x, y), n).is_some() {
+                        mvs.push((mv, 0));
+                    }
+                }
+            } else if dest == (x, y) {
+                // current position is the destination
+                if self.state.cranes[i].container == -1 {
+                    assert_ne!(self.state.board[x][y], -1);
+                    mvs.push((Move::Pick, 0));
+                } else {
+                    mvs.push((Move::Release, 0));
+                }
+            } else {
+                let large = self.state.cranes[i].large;
+                if self.state.cranes[i].container == -1 || busy[cont] {
+                    mvs = self
+                        .state
+                        .bfs((x, y), dest, large || self.state.cranes[i].container == -1);
+                } else {
+                    mvs.push((Move::Stay, 0));
+                    for dir in 0..4 {
+                        let mv = Move::Move(dir);
+                        let next = mv.next((x, y), n);
+                        if next.is_some() && next.unwrap() != dest {
+                            let (tx, ty) = next.unwrap();
+                            if !large && self.state.cranes[i].container != -1 && self.state.board[tx][ty] != -1 {
+                                continue;
+                            }
+                            mvs.push((mv, -1));
+                        }
+                    }
+                }
+            }
+            possible_moves.push(mvs);
+        }
+        //dbg!(&possible_moves);
+        let mut acceptable_cands = vec![];
+        for cand in possible_moves.iter().multi_cartesian_product() {
+            let (cand, dists): (Vec<_>, Vec<_>) = cand.into_iter().cloned().unzip();
+            if cand.iter().all(|mv| *mv == Move::Stay) {
+                // no progress
+                continue;
+            }
+            let d: i32 = dists.into_iter().sum();
+            let ok = self.validate_turn_action(&cand);
+            if ok {
+                acceptable_cands.push((cand, d));
+            }
+        }
+        if !acceptable_cands.is_empty() {
+            // return candidate with best progress
+            acceptable_cands.sort_by_key(|(_, d)| *d);
+            return acceptable_cands.into_iter().next().unwrap().0;
+        }
+        panic!("Cannot find move candidate!");
+    }
     fn solve(&mut self) -> Solution {
         let n = self.input.n;
         let mut actions = vec![];
@@ -650,12 +820,19 @@ impl Solver {
         let n_crane = 5;
         let mut turn = 0;
         let max_turn = 1000;
-        while !self.state.done.iter().map(|v| v.len()).all(|x| x == n) {
+        let mut n_remaining_containers = n*n - self.state.done.iter().map(|v| v.len()).sum::<usize>();
+        while n_remaining_containers > 0 {
             if turn >= max_turn {
                 break;
             }
-            let dests = self.match_crane_with_target(n_crane);
-            let act = self.consider_next_move(&dests);
+            let act;
+            if n_remaining_containers <= n_crane {
+                let assignment = self.assign_all_remaining_containers(n_crane);
+                act = self.consider_next_moves_in_last_phase(&assignment);
+            } else {
+                let dests = self.match_crane_with_target(n_crane);
+                act = self.consider_next_move(&dests);
+            }
             let ext_act = extend_move(&act, n);
             eprintln!(
                 "turn: {}: {}",
@@ -665,6 +842,7 @@ impl Solver {
             self.state.step(&ext_act).unwrap();
             actions.push(ext_act);
             turn += 1;
+            n_remaining_containers = n*n - self.state.done.iter().map(|v| v.len()).sum::<usize>();
         }
         actions = (0..actions[0].len())
             .map(|i| actions.iter().map(|inner| inner[i].clone()).collect_vec())
