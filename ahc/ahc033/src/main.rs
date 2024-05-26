@@ -333,9 +333,6 @@ impl State {
             if let ContainerState::Queue(i, d) = container_states[cont] {
                 n_kicked[i] = usize::max(n_kicked[i], d + 1);
             }
-            //if (cont + 1) % 5 != 0 {
-            //    cand.push(cont + 1);
-            //}
             cand.remove(0);
         }
         targets
@@ -363,10 +360,10 @@ impl State {
         }
         dests
     }
-    fn search_free_cells(&self) -> Vec<(usize, usize)> {
+    fn search_free_cells(&self, search_order: &Vec<usize>) -> Vec<(usize, usize)> {
         let n = self.len();
         let mut res = vec![];
-        for i in 0..n {
+        for &i in search_order {
             if i == n/2 {
                 continue;
             }
@@ -469,6 +466,9 @@ struct Solution {
 }
 
 impl Solution {
+    fn len(&self) -> usize {
+        self.actions[0].len()
+    }
     fn print(&self) {
         for act in &self.actions {
             let s = act.iter().map(|mv| mv.to_char()).collect::<String>();
@@ -496,7 +496,7 @@ impl Solver {
         Self { input, state }
     }
     // returns mapping of: crane id => destination
-    fn match_crane_with_target(&self, n_crane: usize) -> Vec<(usize, usize)> {
+    fn match_crane_with_target(&self, n_crane: usize, row_search_order: &Vec<usize>) -> Vec<(usize, usize)> {
         let n = self.input.n;
         let cand = self.state.next_containers_to_caryy_out().into_iter().map(|x| x as i32).collect_vec();
         let new_dest_set = self.state.make_destinations();
@@ -510,7 +510,7 @@ impl Solver {
             .into_iter()
             .filter(|i| self.state.cranes[*i].container != -1)
             .collect_vec();
-        let free_cells = self.state.search_free_cells();
+        let free_cells = self.state.search_free_cells(row_search_order);
         let mut n_free_cells = free_cells.len();
         let mut needs_free_cell = vec![];
         for &i in &busy_list {
@@ -630,7 +630,7 @@ impl Solver {
         }
         ok
     }
-    fn consider_next_move(&self, dests: &Vec<(usize, usize)>) -> Vec<Move> {
+    fn consider_next_move(&self, dests: &Vec<(usize, usize)>) -> Option<Vec<Move>> {
         let n = self.input.n;
         let n_crane = dests.len();
         let mut possible_moves = vec![];
@@ -682,9 +682,10 @@ impl Solver {
         if !acceptable_cands.is_empty() {
             // return candidate with best progress
             acceptable_cands.sort_by_key(|(_, d)| *d);
-            return acceptable_cands.into_iter().next().unwrap().0;
+            return Some(acceptable_cands.into_iter().next().unwrap().0);
         }
-        panic!("Cannot find move candidate!");
+        // cannot find any move
+        None
     }
     fn assign_all_remaining_containers(&self, n_crane: usize) -> Vec<(usize, (usize, usize))> {
         let n = self.input.n;
@@ -732,7 +733,7 @@ impl Solver {
         }
         turn_to_complete
     }
-    fn consider_next_moves_in_last_phase(&self, assignment: &Vec<(usize, (usize, usize))>) -> Vec<Move> {
+    fn consider_next_moves_in_last_phase(&self, assignment: &Vec<(usize, (usize, usize))>) -> Option<Vec<Move>> {
         let n = self.input.n;
         let next_containers = self.state.next_containers_to_caryy_out();
         let n_crane = assignment.len();
@@ -792,7 +793,6 @@ impl Solver {
             }
             possible_moves.push(mvs);
         }
-        //dbg!(&possible_moves);
         let mut acceptable_cands = vec![];
         for cand in possible_moves.iter().multi_cartesian_product() {
             let (cand, dists): (Vec<_>, Vec<_>) = cand.into_iter().cloned().unzip();
@@ -809,17 +809,18 @@ impl Solver {
         if !acceptable_cands.is_empty() {
             // return candidate with best progress
             acceptable_cands.sort_by_key(|(_, d)| *d);
-            return acceptable_cands.into_iter().next().unwrap().0;
+            return Some(acceptable_cands.into_iter().next().unwrap().0);
         }
-        panic!("Cannot find move candidate!");
+        // cannot find any move
+        None
     }
-    fn solve(&mut self) -> Solution {
+    fn solve_row_order(&mut self, row_search_order: &Vec<usize>) -> Option<Solution> {
         let n = self.input.n;
         let mut actions = vec![];
 
         let n_crane = 5;
         let mut turn = 0;
-        let max_turn = 1000;
+        let max_turn = 200;
         let mut n_remaining_containers = n*n - self.state.done.iter().map(|v| v.len()).sum::<usize>();
         while n_remaining_containers > 0 {
             if turn >= max_turn {
@@ -830,15 +831,18 @@ impl Solver {
                 let assignment = self.assign_all_remaining_containers(n_crane);
                 act = self.consider_next_moves_in_last_phase(&assignment);
             } else {
-                let dests = self.match_crane_with_target(n_crane);
+                let dests = self.match_crane_with_target(n_crane, row_search_order);
                 act = self.consider_next_move(&dests);
             }
-            let ext_act = extend_move(&act, n);
-            eprintln!(
-                "turn: {}: {}",
-                turn,
-                ext_act.iter().map(|mv| mv.to_char()).collect::<String>()
-            );
+            if act.is_none() {
+                return None;
+            }
+            let ext_act = extend_move(&act.unwrap(), n);
+            //eprintln!(
+            //    "turn: {}: {}",
+            //    turn,
+            //    ext_act.iter().map(|mv| mv.to_char()).collect::<String>()
+            //);
             self.state.step(&ext_act).unwrap();
             actions.push(ext_act);
             turn += 1;
@@ -847,7 +851,28 @@ impl Solver {
         actions = (0..actions[0].len())
             .map(|i| actions.iter().map(|inner| inner[i].clone()).collect_vec())
             .collect();
-        Solution { actions }
+        Some(Solution { actions })
+    }
+    fn solve(&mut self) -> Solution {
+        let n = self.input.n;
+        let rows = (0..n).filter(|&i| i != n / 2).collect_vec();
+        let mut best_score = 10000;
+        let mut best_sol = Solution { actions: vec![] };
+        for perm in rows.iter().permutations(n - 1) {
+            self.state = State::new(&self.input);
+            let sol = self.solve_row_order(&perm.into_iter().cloned().collect());
+            if sol.is_none() {
+                continue;
+            }
+            let sol = sol.unwrap();
+            let score = sol.len();
+            if score < best_score {
+                eprintln!("best_score = {score}");
+                best_score = score;
+                best_sol = sol;
+            }
+        }
+        best_sol
     }
 }
 
