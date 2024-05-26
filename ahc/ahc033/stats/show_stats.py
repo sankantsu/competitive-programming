@@ -13,7 +13,7 @@ def load():
         with open(out) as f:
             turn = 10000
             for i in range(N):
-                line = f.readline()
+                line = f.readline().strip()
                 turn = min(turn, len(line))
             data.append((str(out), turn))
     return data
@@ -22,7 +22,7 @@ def load():
 def main():
     data = load()
     files, turns = zip(*data)
-    valid_turns = list(filter(lambda t: 0 < t and t < 1000, turns))
+    valid_turns = list(filter(lambda t: 0 < t and t < 200, turns))
     n_success = len(valid_turns)
 
     best = np.min(valid_turns)
@@ -33,7 +33,7 @@ def main():
     print(f"Failed: {len(turns) - n_success}")
     print(f"Best: {best}, Worst: {worst}")
     print(f"Mean: {mean:.2f}, Geometric Mean: {gmean:.2f}")
-    plt.hist(valid_turns, bins=50)
+    plt.hist(valid_turns, bins=min(50, worst - best + 1))
     plt.xlabel("Turns")
     plt.ylabel("Occurences")
     plt.show()
