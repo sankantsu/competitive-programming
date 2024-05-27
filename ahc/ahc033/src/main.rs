@@ -1,5 +1,6 @@
 use itertools::Itertools;
 use std::collections::VecDeque;
+use std::collections::HashSet;
 
 struct Input {
     n: usize,
@@ -312,36 +313,40 @@ impl State {
         }
         states
     }
-    fn determine_target_containers(&self) -> Vec<usize> {
+    fn determine_target_containers(&self, recv_order: &Vec<usize>) -> Vec<usize> {
         let n = self.len();
-        let container_states = (0..n*n).map(|cont| self.search_container(cont as u32)).collect_vec();
-        let mut cand = self.next_containers_to_caryy_out();
+        let container_states = self.list_all_container_state();
+        let cand = self.next_containers_to_caryy_out();
         let mut targets = vec![];
-        let mut n_kicked = vec![0; n];
-        while targets.len() < n && !cand.is_empty() {
-            let calc_n_kick = |cs: &ContainerState| {
-                match cs {
-                    ContainerState::Board(_, _) => 0,
-                    ContainerState::Carrying(_) => 0,
-                    ContainerState::Queue(i, d) => usize::max(0, d + 1 - n_kicked[*i]),
-                    ContainerState::Done => usize::MAX,
-                }
-            };
-            cand.sort_by_key(|cont| calc_n_kick(&container_states[*cont]));
-            let cont = cand[0];
-            targets.push(cont);
-            if let ContainerState::Queue(i, d) = container_states[cont] {
-                n_kicked[i] = usize::max(n_kicked[i], d + 1);
+        for cont in 0..n*n {
+            match container_states[cont] {
+                ContainerState::Carrying(_) => {
+                    targets.push(cont);
+                },
+                ContainerState::Board(_, _) => {
+                    if cand.contains(&cont) {
+                        targets.push(cont);
+                    }
+                },
+                _ => continue,
             }
-            cand.remove(0);
+        }
+        let mut kick_cnt = vec![0; n];
+        for &row in recv_order {
+            if targets.len() >= n {
+                break;
+            }
+            kick_cnt[row] += 1;
+            if self.queue[row].len() + kick_cnt[row] < n {
+                continue;
+            }
+            targets.push(self.queue[row][n - 1 - kick_cnt[row]] as usize);
         }
         targets
     }
-    fn make_destinations(&self) -> Vec<(usize, usize)> {
-        let n = self.len();
-        let targets = self.determine_target_containers();
+    fn make_destinations(&self, recv_order: &Vec<usize>) -> Vec<(usize, usize)> {
+        let targets = self.determine_target_containers(recv_order);
         let mut dests = vec![];
-        let mut n_kicked = vec![0; n];
         for t in &targets {
             let cs = self.search_container(*t as u32);
             match cs {
@@ -350,11 +355,8 @@ impl State {
                 ContainerState::Board(x, y) => {
                     dests.push((x, y));
                 },
-                ContainerState::Queue(i, d) => {
-                    while n_kicked[i] < d + 1 {
-                        dests.push((i, 0));
-                        n_kicked[i] += 1;
-                    }
+                ContainerState::Queue(i, _) => {
+                    dests.push((i, 0));
                 }
             }
         }
@@ -495,11 +497,62 @@ impl Solver {
         let state = State::new(&input);
         Self { input, state }
     }
+    fn determine_recv_order(&self) -> Vec<usize> {
+        let n = self.input.n;
+        let k = 5;
+        let mut res = vec![];
+        let queue = self.input.a.clone();
+        let mut kicked = vec![1; n];
+        for _ in 0..(n * n / k - 1) {
+            let mut best_score = 0;
+            let mut best_cnt = vec![];
+            for comb in (0..n).combinations_with_replacement(k) {
+                let mut cnt = vec![0; n];
+                for x in &comb {
+                    cnt[*x] += 1;
+                }
+                let ok = (0..n).all(|i| kicked[i] + cnt[i] <= n);
+                if !ok {
+                    continue;
+                }
+                let mut pool = HashSet::new();
+                for i in 0..n {
+                    for j in 0..(kicked[i] + cnt[i]) {
+                        pool.insert(queue[i][j] as usize);
+                    }
+                }
+                let mut score = 0;
+                for i in 0..n {
+                    for j in 0..n {
+                        let cont = n*i + j;
+                        if pool.contains(&cont) {
+                            score += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                if score > best_score {
+                    best_score = score;
+                    best_cnt = cnt;
+                }
+            }
+            for i in 0..n {
+                kicked[i] += best_cnt[i];
+            }
+            for i in 0..n {
+                for _ in 0..best_cnt[i] {
+                    res.push(i);
+                }
+            }
+        }
+        res
+    }
     // returns mapping of: crane id => destination
-    fn match_crane_with_target(&self, n_crane: usize, row_search_order: &Vec<usize>) -> Vec<(usize, usize)> {
+    fn match_crane_with_target(&self, n_crane: usize, row_search_order: &Vec<usize>, recv_order: &Vec<usize>) -> Vec<(usize, usize)> {
         let n = self.input.n;
         let cand = self.state.next_containers_to_caryy_out().into_iter().map(|x| x as i32).collect_vec();
-        let new_dest_set = self.state.make_destinations();
+        let new_dest_set = self.state.make_destinations(recv_order);
 
         let is_carry_out_target = |cont| {
             cand.contains(&cont)
@@ -814,7 +867,7 @@ impl Solver {
         // cannot find any move
         None
     }
-    fn solve_row_order(&mut self, row_search_order: &Vec<usize>) -> Option<Solution> {
+    fn solve_row_order(&mut self, row_search_order: &Vec<usize>, recv_order: &Vec<usize>) -> Option<Solution> {
         let n = self.input.n;
         let mut actions = vec![];
 
@@ -831,7 +884,7 @@ impl Solver {
                 let assignment = self.assign_all_remaining_containers(n_crane);
                 act = self.consider_next_moves_in_last_phase(&assignment);
             } else {
-                let dests = self.match_crane_with_target(n_crane, row_search_order);
+                let dests = self.match_crane_with_target(n_crane, row_search_order, recv_order);
                 act = self.consider_next_move(&dests);
             }
             if act.is_none() {
@@ -854,13 +907,14 @@ impl Solver {
         Some(Solution { actions })
     }
     fn solve(&mut self) -> Solution {
+        let recv_order = self.determine_recv_order();
         let n = self.input.n;
         let rows = (0..n).filter(|&i| i != n / 2).collect_vec();
         let mut best_score = 10000;
         let mut best_sol = Solution { actions: vec![] };
         for perm in rows.iter().permutations(n - 1) {
             self.state = State::new(&self.input);
-            let sol = self.solve_row_order(&perm.into_iter().cloned().collect());
+            let sol = self.solve_row_order(&perm.into_iter().cloned().collect(), &recv_order);
             if sol.is_none() {
                 continue;
             }
