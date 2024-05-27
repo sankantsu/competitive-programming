@@ -313,7 +313,35 @@ impl State {
         }
         states
     }
+    fn determine_target_containers_on_demand(&self) -> Vec<usize> {
+        let n = self.len();
+        let container_states = (0..n*n).map(|cont| self.search_container(cont as u32)).collect_vec();
+        let mut cand = self.next_containers_to_caryy_out();
+        let mut targets = vec![];
+        let mut n_kicked = vec![0; n];
+        while targets.len() < n && !cand.is_empty() {
+            let calc_n_kick = |cs: &ContainerState| {
+                match cs {
+                    ContainerState::Board(_, _) => 0,
+                    ContainerState::Carrying(_) => 0,
+                    ContainerState::Queue(i, d) => usize::max(0, d + 1 - n_kicked[*i]),
+                    ContainerState::Done => usize::MAX,
+                }
+            };
+            cand.sort_by_key(|cont| calc_n_kick(&container_states[*cont]));
+            let cont = cand[0];
+            targets.push(cont);
+            if let ContainerState::Queue(i, d) = container_states[cont] {
+                n_kicked[i] = usize::max(n_kicked[i], d + 1);
+            }
+            cand.remove(0);
+        }
+        targets
+    }
     fn determine_target_containers(&self, recv_order: &Vec<usize>) -> Vec<usize> {
+        if recv_order.len() == 0 {
+            return self.determine_target_containers_on_demand();
+        }
         let n = self.len();
         let container_states = self.list_all_container_state();
         let cand = self.next_containers_to_caryy_out();
@@ -345,8 +373,11 @@ impl State {
         targets
     }
     fn make_destinations(&self, recv_order: &Vec<usize>) -> Vec<(usize, usize)> {
+        let n = self.len();
         let targets = self.determine_target_containers(recv_order);
         let mut dests = vec![];
+        let on_demand = recv_order.is_empty();
+        let mut n_kicked = vec![0; n];
         for t in &targets {
             let cs = self.search_container(*t as u32);
             match cs {
@@ -355,8 +386,12 @@ impl State {
                 ContainerState::Board(x, y) => {
                     dests.push((x, y));
                 },
-                ContainerState::Queue(i, _) => {
-                    dests.push((i, 0));
+                ContainerState::Queue(i, d) => {
+                    let cnt = if on_demand { d + 1 - n_kicked[i] } else { 1 };
+                    n_kicked[i] += cnt;
+                    for _ in 0..cnt {
+                        dests.push((i, 0));
+                    }
                 }
             }
         }
@@ -497,16 +532,15 @@ impl Solver {
         let state = State::new(&input);
         Self { input, state }
     }
-    fn determine_recv_order(&self) -> Vec<usize> {
+    fn determine_recv_order(&self, chunk_size: usize) -> Vec<usize> {
         let n = self.input.n;
-        let k = 5;
         let mut res = vec![];
         let queue = self.input.a.clone();
         let mut kicked = vec![1; n];
-        for _ in 0..(n * n / k - 1) {
+        for _ in 0..(n * n / chunk_size - 1) {
             let mut best_score = 0;
             let mut best_cnt = vec![];
-            for comb in (0..n).combinations_with_replacement(k) {
+            for comb in (0..n).combinations_with_replacement(chunk_size) {
                 let mut cnt = vec![0; n];
                 for x in &comb {
                     cnt[*x] += 1;
@@ -867,13 +901,12 @@ impl Solver {
         // cannot find any move
         None
     }
-    fn solve_row_order(&mut self, row_search_order: &Vec<usize>, recv_order: &Vec<usize>) -> Option<Solution> {
+    fn solve_row_order(&mut self, row_search_order: &Vec<usize>, recv_order: &Vec<usize>, max_turn: usize) -> Option<Solution> {
         let n = self.input.n;
         let mut actions = vec![];
 
         let n_crane = 5;
         let mut turn = 0;
-        let max_turn = 200;
         let mut n_remaining_containers = n*n - self.state.done.iter().map(|v| v.len()).sum::<usize>();
         while n_remaining_containers > 0 {
             if turn >= max_turn {
@@ -907,23 +940,28 @@ impl Solver {
         Some(Solution { actions })
     }
     fn solve(&mut self) -> Solution {
-        let recv_order = self.determine_recv_order();
+        let recv_order_list = vec![vec![], self.determine_recv_order(4), self.determine_recv_order(5)];
         let n = self.input.n;
         let rows = (0..n).filter(|&i| i != n / 2).collect_vec();
-        let mut best_score = 10000;
+        let mut best_score = 25000000;
         let mut best_sol = Solution { actions: vec![] };
+        let mut max_turn = 120;
         for perm in rows.iter().permutations(n - 1) {
-            self.state = State::new(&self.input);
-            let sol = self.solve_row_order(&perm.into_iter().cloned().collect(), &recv_order);
-            if sol.is_none() {
-                continue;
-            }
-            let sol = sol.unwrap();
-            let score = sol.len();
-            if score < best_score {
-                eprintln!("best_score = {score}");
-                best_score = score;
-                best_sol = sol;
+            let perm = perm.into_iter().cloned().collect();  // Vec<&usize> -> Vec<usize>
+            for recv_order in &recv_order_list {
+                self.state = State::new(&self.input);
+                let sol = self.solve_row_order(&perm, recv_order, max_turn);
+                if sol.is_none() {
+                    continue;
+                }
+                let sol = sol.unwrap();
+                let n_turn = sol.len();
+                if n_turn < best_score {
+                    eprintln!("best_score = {n_turn}");
+                    best_score = n_turn;
+                    max_turn = n_turn;
+                    best_sol = sol;
+                }
             }
         }
         best_sol
