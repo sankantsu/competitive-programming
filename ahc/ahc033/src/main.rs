@@ -1,6 +1,7 @@
 use itertools::Itertools;
 use std::collections::VecDeque;
 use std::collections::HashSet;
+use std::time;
 
 struct Input {
     n: usize,
@@ -397,16 +398,29 @@ impl State {
         }
         dests
     }
-    fn search_free_cells(&self, search_order: &Vec<usize>) -> Vec<(usize, usize)> {
+    fn search_free_cells(&self, search_order: &Vec<usize>, col_major: bool) -> Vec<(usize, usize)> {
         let n = self.len();
         let mut res = vec![];
-        for &i in search_order {
-            if i == n/2 {
-                continue;
-            }
+        if col_major {
             for j in (2..n - 1).rev() {
-                if self.board[i][j] == -1 {
-                    res.push((i, j));
+                for &i in search_order {
+                    if i == n/2 {
+                        continue;
+                    }
+                    if self.board[i][j] == -1 {
+                        res.push((i, j));
+                    }
+                }
+            }
+        } else {
+            for &i in search_order {
+                if i == n/2 {
+                    continue;
+                }
+                for j in (2..n - 1).rev() {
+                    if self.board[i][j] == -1 {
+                        res.push((i, j));
+                    }
                 }
             }
         }
@@ -583,7 +597,7 @@ impl Solver {
         res
     }
     // returns mapping of: crane id => destination
-    fn match_crane_with_target(&self, n_crane: usize, row_search_order: &Vec<usize>, recv_order: &Vec<usize>) -> Vec<(usize, usize)> {
+    fn match_crane_with_target(&self, n_crane: usize, row_search_order: &Vec<usize>, recv_order: &Vec<usize>, col_major: bool) -> Vec<(usize, usize)> {
         let n = self.input.n;
         let cand = self.state.next_containers_to_caryy_out().into_iter().map(|x| x as i32).collect_vec();
         let new_dest_set = self.state.make_destinations(recv_order);
@@ -597,7 +611,7 @@ impl Solver {
             .into_iter()
             .filter(|i| self.state.cranes[*i].container != -1)
             .collect_vec();
-        let free_cells = self.state.search_free_cells(row_search_order);
+        let free_cells = self.state.search_free_cells(row_search_order, col_major);
         let mut n_free_cells = free_cells.len();
         let mut needs_free_cell = vec![];
         for &i in &busy_list {
@@ -901,7 +915,7 @@ impl Solver {
         // cannot find any move
         None
     }
-    fn solve_row_order(&mut self, row_search_order: &Vec<usize>, recv_order: &Vec<usize>, max_turn: usize) -> Option<Solution> {
+    fn solve_row_order(&mut self, row_search_order: &Vec<usize>, recv_order: &Vec<usize>, col_major: bool, max_turn: usize) -> Option<Solution> {
         let n = self.input.n;
         let mut actions = vec![];
 
@@ -917,7 +931,7 @@ impl Solver {
                 let assignment = self.assign_all_remaining_containers(n_crane);
                 act = self.consider_next_moves_in_last_phase(&assignment);
             } else {
-                let dests = self.match_crane_with_target(n_crane, row_search_order, recv_order);
+                let dests = self.match_crane_with_target(n_crane, row_search_order, recv_order, col_major);
                 act = self.consider_next_move(&dests);
             }
             if act.is_none() {
@@ -946,24 +960,34 @@ impl Solver {
         let mut best_score = 25000000;
         let mut best_sol = Solution { actions: vec![] };
         let mut max_turn = 120;
+        let start = time::Instant::now();
         for perm in rows.iter().permutations(n - 1) {
             let perm = perm.into_iter().cloned().collect();  // Vec<&usize> -> Vec<usize>
             for recv_order in &recv_order_list {
-                self.state = State::new(&self.input);
-                let sol = self.solve_row_order(&perm, recv_order, max_turn);
-                if sol.is_none() {
-                    continue;
-                }
-                let sol = sol.unwrap();
-                let n_turn = sol.len();
-                if n_turn < best_score {
-                    eprintln!("best_score = {n_turn}");
-                    best_score = n_turn;
-                    max_turn = n_turn;
-                    best_sol = sol;
+                for col_major in [false, true] {
+                    let elapsed = start.elapsed();
+                    if elapsed > time::Duration::from_millis(2800) {
+                        eprintln!("Time over!");
+                        break;
+                    }
+                    self.state = State::new(&self.input);
+                    let sol = self.solve_row_order(&perm, recv_order, col_major, max_turn);
+                    if sol.is_none() {
+                        continue;
+                    }
+                    let sol = sol.unwrap();
+                    let n_turn = sol.len();
+                    if n_turn < best_score {
+                        eprintln!("best_score = {n_turn}");
+                        best_score = n_turn;
+                        max_turn = n_turn;
+                        best_sol = sol;
+                    }
                 }
             }
         }
+        let elapsed_ms = start.elapsed().as_millis();
+        eprintln!("Elapsed time: {elapsed_ms} ms");
         best_sol
     }
 }
