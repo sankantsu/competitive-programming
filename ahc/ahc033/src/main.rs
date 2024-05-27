@@ -678,11 +678,11 @@ impl Solver {
     fn validate_turn_action(&self, cand: &Vec<Move>) -> bool {
         let n = self.input.n;
         let n_crane = cand.len();
-        let mut next = vec![];
+        let mut next = vec![(!0, !0); n_crane];
         for i in 0..n_crane {
             let cur = self.state.get_crane_pos(i);
             let mv = &cand[i];
-            next.push(mv.next(cur, n).unwrap());
+            next[i] = mv.next(cur, n).unwrap();
         }
         // check colllision
         let mut ok = true;
