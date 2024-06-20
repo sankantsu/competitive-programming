@@ -73,24 +73,35 @@ struct Route {
 }
 
 impl Route {
-    fn new(n: usize) -> Self {
+    fn new(n: usize, cols: &[usize]) -> Self {
         let mut route = vec![];
-        for i in 0..n {
-            for j in 0..n {
-                if i % 2  == 0 {
-                    route.push((i, j));
-                } else {
-                    route.push((i, n - 1 - j));
+        let mut ci = 0;
+        let mut cj = 0;
+        while ci < n {
+            while cj < n {
+                let dj = if ci % 2 == 0 { 1 } else { !0 };
+                route.push((ci, cj));
+                let nj = usize::wrapping_add(cj, dj);
+                if nj >= n {
+                    break;
                 }
+                cj = nj;
             }
+            if ci == n - 1 { break; }
+            ci += 1;
         }
-        for j in 0..n {
-            for i in 0..n {
-                if j % 2  == 0 {
-                    route.push((n - 1 - i, j));
-                } else {
-                    route.push((i, j));
-                }
+        for (j, &col) in cols.iter().enumerate() {
+            loop {
+                route.push((ci, cj));
+                if cj == col { break; }
+                cj += 1;
+            }
+            while ci < n {
+                let di = if j % 2 == 0 { !0 } else { 1 };
+                route.push((ci, cj));
+                let ni = usize::wrapping_add(ci, di);
+                if ni >= n { break; }
+                ci = ni;
             }
         }
         Route { route }
@@ -126,7 +137,8 @@ fn solve(input: &Input) -> Solution {
     let n = input.n;
     let h = &input.h;
 
-    let route = Route::new(n);
+    let cols = (0..n/2).map(|j| 2*j).collect::<Vec<_>>();
+    let route = Route::new(n, &cols);
     let m = route.len();
     // Vertices
     // 0 .. n*n: correspond to each square
