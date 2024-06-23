@@ -79,6 +79,26 @@ long solve(long n, long m) {
     return ans.val();
 }
 
+long solve2(long n, long m) {
+    mint ans = 0;
+    rep(i, max_digit) {
+        if (!(m & (1L<<i))) {
+            continue;
+        }
+        long x = 1L << (i + 1);
+        long k = n / x;
+        long r = n % x;
+        mint s = 0;
+        s += k * (1L<<i);
+        s += max(0L, r - (1L<<i) + 1);
+        ans += s;
+#if DEBUG
+        cerr << "i, s: " << i << " " << s.val() << endl;
+#endif
+    }
+    return ans.val();
+}
+
 auto gen_testcase() {
     static mt19937 mt;
     int ndigit = 4;
@@ -92,7 +112,8 @@ void test() {
     rep(i, n_test) {
         auto [n, m] = gen_testcase();
         long expect = solve_jury(n, m);
-        long actual = solve(n, m);
+        /*long actual = solve(n, m);*/
+        long actual = solve2(n, m);
         if (expect != actual) {
             cerr << "Wrong anser!" << endl;
             cerr << "Expected: " << expect << endl;
@@ -112,7 +133,8 @@ int main() {
 
     long n, m;
     cin >> n >> m;
-    long ans = solve(n, m);
+    /*long ans = solve(n, m);*/
+    long ans = solve2(n, m);
 
     cout << ans << endl;
 }
