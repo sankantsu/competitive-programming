@@ -1,4 +1,5 @@
 use ac_library::mincostflow::MinCostFlowGraph;
+use rand::prelude::*;
 
 #[derive(Clone, Debug)]
 struct Input {
@@ -47,10 +48,16 @@ impl Action {
 }
 
 struct Solution {
+    cost: i64,
     actions: Vec<Action>,
 }
 
 impl Solution {
+    fn empty() -> Self {
+        let cost = 20 * 20 * 10000;
+        let actions = vec![];
+        Self { cost, actions }
+    }
     fn print(&self) {
         for act in &self.actions {
             let s = act.as_str();
@@ -133,11 +140,19 @@ impl Route {
     }
 }
 
-fn solve(input: &Input) -> Solution {
+fn solve_cols(input: &Input, cols: &[usize]) -> Option<Solution> {
     let n = input.n;
     let h = &input.h;
 
-    let cols = (0..n/2).map(|j| 2*j).collect::<Vec<_>>();
+    let mut max_flow = 0;
+    for i in 0..n {
+        for j in 0..n {
+            if h[i][j] > 0 {
+                max_flow += h[i][j];
+            }
+        }
+    }
+
     let route = Route::new(n, &cols);
     let m = route.len();
     // Vertices
@@ -177,8 +192,10 @@ fn solve(input: &Input) -> Solution {
         graph.add_edge(n*i + j, n*n + k, inf, 1);
         graph.add_edge(n*n + k, n*i + j, inf, 1);
     }
-    let (flow, cost) = graph.flow(source, sink, inf);
-    dbg!(flow, cost);
+    let (flow, _) = graph.flow(source, sink, inf);
+    if flow < max_flow {
+        return None
+    }
 
     let edges = graph.edges();
     let n_edge = edges.len();
@@ -196,26 +213,114 @@ fn solve(input: &Input) -> Solution {
         }
     }
 
+    let mut v = 0;
+    let mut cost = 0;
     let mut actions = vec![];
     for k in 0..(m - 1) {
         let load = load_seq[k];
         if load != 0 {
             actions.push(Action::Load(load));
+            cost += load.abs();
+            v += load;
         }
         let mv = route.get_move(k);
         if mv.is_some() {
             actions.push(Action::Move(mv.unwrap()));
+            cost += 100 + v;
         }
     }
     let load = load_seq[m - 1];
     if load != 0 {
         actions.push(Action::Load(load));
+        cost += load;
+        v += load;
     }
-    Solution { actions }
+    assert_eq!(v, 0);
+    Some(Solution { cost, actions })
+}
+
+fn climb(input: &Input, cols: &mut Vec<usize>) -> Option<Solution> {
+    let n = input.n;
+    let mut rng = thread_rng();
+    let mut best_sol = solve_cols(input, &cols)?;
+
+    let n_iter = 20;
+    for _ in 0..n_iter {
+        let r = rng.gen_range(0..10);
+        if r < 8 {
+            // remove col
+            if cols.len() == 1 {
+                continue;
+            }
+            let idx = rng.gen_range(0..cols.len());
+            let col = cols[idx];
+            cols.remove(idx);
+            let sol = solve_cols(input, &cols);
+            if sol.is_none() { continue; }
+            let sol = sol.unwrap();
+            if sol.cost < best_sol.cost {
+                // eprintln!("Iter: {}, Cost: {}", iter, sol.cost);
+                best_sol = sol;
+            } else {
+                cols.insert(idx, col);
+            }
+        } else {
+            // add col
+            let col = rng.gen_range(0..n);
+            if cols.contains(&col) { continue; }
+            let idx = cols.iter().position(|&c| c > col).unwrap_or(cols.len());
+            cols.insert(idx, col);
+            let sol = solve_cols(input, &cols);
+            if sol.is_none() { continue; }
+            let sol = sol.unwrap();
+            if sol.cost < best_sol.cost {
+                // eprintln!("Iter: {}, Cost: {}", iter, sol.cost);
+                best_sol = sol;
+            } else {
+                cols.remove(idx);
+            }
+        }
+    }
+    Some(best_sol)
+}
+
+fn gen_random_cols(n: usize) -> Vec<usize> {
+    let mut rng = thread_rng();
+    let mut cols = vec![];
+    for col in 0..n {
+        let r = rng.gen_range(0..2);
+        if r == 0 {
+            cols.push(col);
+        }
+    }
+    cols
+}
+
+fn solve(input: &Input) -> Solution {
+    let n = input.n;
+    let mut best_sol = Solution::empty();
+    let start = std::time::Instant::now();
+    let mut iter = 0;
+    loop {
+        iter += 1;
+        let t = start.elapsed();
+        if t > std::time::Duration::from_millis(1800) {
+            break;
+        }
+        let mut cols = gen_random_cols(n);
+        let sol = climb(input, &mut cols);
+        if sol.is_none() { continue; }
+        let sol = sol.unwrap();
+        if sol.cost < best_sol.cost {
+            eprintln!("Iter: {}, Cost: {}", iter, sol.cost);
+            best_sol = sol;
+        }
+    }
+    best_sol
 }
 
 fn main() {
-    let inpt = input();
-    let sol = solve(&inpt);
+    let input_ = input();
+    let sol = solve(&input_);
     sol.print();
 }
